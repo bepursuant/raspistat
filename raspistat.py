@@ -1,4 +1,4 @@
-#! /usr/bin/python
+#! /usr/bin/python3
 
 import sys
 import subprocess
@@ -6,25 +6,26 @@ import os
 import time
 import RPi.GPIO as GPIO
 import datetime
-import ConfigParser
+import configparser
 
 import MySQLdb as mdb
 
 from PythonDaemon import Daemon
+
 # from daemon import runner
 from getIndoorTemp import getIndoorTemp
 
-#set working directory to where "thermDaemonDB.py" is
+#set working directory to where "thermDaemon.py" is
 abspath = os.path.abspath(__file__)
 dname = os.path.dirname(abspath)
 # os.chdir(dname)
 
 #read values from the config file
 config = ConfigParser.ConfigParser()
-config.read(dname+"/config.txt")
+config.read(dname+"/rpi.conf")
 
-active_hysteresis = float(config.get('main','active_hysteresis'))
-inactive_hysteresis = float(config.get('main','inactive_hysteresis'))
+active_hysteresis = config.getfloat('main','active_hysteresis')
+inactive_hysteresis = config.getfloat('main','inactive_hysteresis')
 
 
 ORANGE_PIN = int(config.get('main','ORANGE_PIN'))
@@ -43,9 +44,19 @@ CONN_PARAMS = (config.get('main','mysqlHost'), config.get('main','mysqlUser'),
 
 
 
-class thermDaemon(Daemon):
+class raspistat(Daemon):
+
+
+	LOGLEVEL = enum('INFO','WARNING','EXCEPTION','ERROR','PANIC')
+	def log(self, message, level):
+		print('[' + level + '] ' + message + '\r\n');
+
+
 		
 	def configureGPIO(self):
+
+		self.log("Configuring GPIO", LOGLEVEL.INFO)
+
 		GPIO.setmode(GPIO.BCM)
 		GPIO.setup(ORANGE_PIN, GPIO.OUT)
 		GPIO.setup(YELLOW_PIN, GPIO.OUT)
@@ -313,13 +324,13 @@ class thermDaemon(Daemon):
 					hvacState = self.off()
 					actMode="'Off'"
 				else:
-					print "It broke."
+					self.log('It Broke?', LOGLEVEL.PANIC)
 
-				print 'Pin Value State:',self.getHVACState()
-				print 'Target Mode:',targetMode
-				print 'Actual Mode:',actMode
-				print 'Temp from DB:', tempList
-				print 'Target Temp:', targetTemp
+				self.log('Pin Value State:' + self.getHVACState(), LOGLEVEL.INFO)
+				self.log('Target Mode:' + targetMode)
+				self.log('Actual Mode:' + actMode)
+				self.log('Temp from DB:' + tempList)
+				self.log('Target Temp:' + targetTemp)
 
 
 
@@ -327,7 +338,7 @@ class thermDaemon(Daemon):
 
 			except Exception:
 				if debug==True:
-					print(Exception)
+					self.log(Exception, LOGLEVEL.EXCEPTION)
 					# raise
 				exc_type, exc_obj, exc_tb = sys.exc_info()
 				fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
@@ -342,13 +353,12 @@ class thermDaemon(Daemon):
 
 
 if __name__ == "__main__":
-        daemon = thermDaemon(dname+'/thermDaemon.pid')
+        daemon = raspistat(dname+'/raspistat.pid')
       
 
         if len(sys.argv) == 2:
                 if 'start' == sys.argv[1]:
                         daemon.start()
-# 						daemon.run()
                 elif 'stop' == sys.argv[1]:
                         daemon.stop()
                 elif 'restart' == sys.argv[1]:
@@ -356,9 +366,9 @@ if __name__ == "__main__":
                 elif 'debug' == sys.argv[1]:
                 		daemon.run(True)
                 else:
-                        print "Unknown command"
+                        print('Unknown command')
                         sys.exit(2)
                 sys.exit(0)
         else:
-                print "usage: %s start|stop|restart" % sys.argv[0]
+                print("usage: %s start|stop|restart" % sys.argv[0])
                 sys.exit(2)
