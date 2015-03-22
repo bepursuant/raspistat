@@ -5,10 +5,11 @@ import subprocess
 import os
 import time
 import RPi.GPIO as GPIO
-import datetime
+from datetime import datetime
 import configparser
+from enum import Enum
 
-import MySQLdb as mdb
+import pymysql as mdb
 
 from PythonDaemon import Daemon
 
@@ -21,7 +22,7 @@ dname = os.path.dirname(abspath)
 # os.chdir(dname)
 
 #read values from the config file
-config = ConfigParser.ConfigParser()
+config = configparser.ConfigParser()
 config.read(dname+"/rpi.conf")
 
 active_hysteresis = config.getfloat('main','active_hysteresis')
@@ -42,20 +43,18 @@ CONN_PARAMS = (config.get('main','mysqlHost'), config.get('main','mysqlUser'),
                config.get('main','mysqlPass'), config.get('main','mysqlDatabase'),
                int(config.get('main','mysqlPort')))
 
+LOGLEVELS = Enum('LOGLEVELS', 'INFO WARNING EXCEPTION ERROR PANIC DEBUG')
 
 
 class raspistat(Daemon):
 
-
-	LOGLEVEL = enum('INFO','WARNING','EXCEPTION','ERROR','PANIC')
 	def log(self, message, level):
-		print('[' + level + '] ' + message + '\r\n');
-
+		print('[' + level.name + '] ' + message );
 
 		
 	def configureGPIO(self):
 
-		self.log("Configuring GPIO", LOGLEVEL.INFO)
+		self.log("Configuring GPIO", LOGLEVELS.INFO)
 
 		GPIO.setmode(GPIO.BCM)
 		GPIO.setup(ORANGE_PIN, GPIO.OUT)
@@ -63,12 +62,18 @@ class raspistat(Daemon):
 		GPIO.setup(GREEN_PIN, GPIO.OUT)
 		GPIO.setup(AUX_PIN, GPIO.OUT)
 
+		self.log("Exporting GPIO", LOGLEVELS.DEBUG)
+
 		subprocess.Popen("echo " + str(ORANGE_PIN) + " > /sys/class/gpio/export", shell=True)
 		subprocess.Popen("echo " + str(YELLOW_PIN) + " > /sys/class/gpio/export", shell=True)
 		subprocess.Popen("echo " + str(GREEN_PIN) + " > /sys/class/gpio/export", shell=True)
 		subprocess.Popen("echo " + str(AUX_PIN) + " > /sys/class/gpio/export", shell=True)
 
+
 	def getHVACState(self):
+
+		self.log("getHVACState - pulling pin values", LOGLEVELS.DEBUG)
+		
 		orangeStatus = int(subprocess.Popen("cat /sys/class/gpio/gpio" + str(ORANGE_PIN) + "/value", shell=True, stdout=subprocess.PIPE).stdout.read().strip())
 		yellowStatus = int(subprocess.Popen("cat /sys/class/gpio/gpio" + str(YELLOW_PIN) + "/value", shell=True, stdout=subprocess.PIPE).stdout.read().strip())
 		greenStatus = int(subprocess.Popen("cat /sys/class/gpio/gpio" + str(GREEN_PIN) + "/value", shell=True, stdout=subprocess.PIPE).stdout.read().strip())
@@ -253,51 +258,52 @@ class raspistat(Daemon):
 		self.configureGPIO()
 		actMode = "'Off'"
 		while True:
-			try:
-				abspath = os.path.abspath(__file__)
-				dname = os.path.dirname(abspath)
-				os.chdir(dname)
+			abspath = os.path.abspath(__file__)
+			dname = os.path.dirname(abspath)
 
-				now = time.time()
-				dbElapsed = now - lastDB
+			os.chdir(dname)
+
+			now = time.time()
+
+			dbElapsed = now - lastDB
 				
-				if self.getHVACState()[2] == 1: 
-					auxElapsed = now - lastAux
-				else:
-					auxElapsed = 0
+			if self.getHVACState()[2] == 1: 
+				auxElapsed = now - lastAux
+			else:
+				auxElapsed = 0
 
 
-				setTime, moduleID, targetTemp, targetMode, expiryTime = self.getDBTargets()
-				moduleID = int(moduleID)
-				targetTemp = int(targetTemp)
+			setTime, moduleID, targetTemp, targetMode, expiryTime = self.getDBTargets()
+			moduleID = int(moduleID)
+			targetTemp = int(targetTemp)
 
-				tempList = self.getTempList()
+			tempList = self.getTempList()
 
 
-				if auxElapsed > AUX_TIMER*60:
-					
-					curTemp = tempList[AUX_ID-1]
-					delta = float(curTemp)-float(auxTemp)
-					auxTemp = curTemp
-					lastAux = time.time()
+			if auxElapsed > AUX_TIMER*60:
+				
+				curTemp = tempList[AUX_ID-1]
+				delta = float(curTemp)-float(auxTemp)
+				auxTemp = curTemp
+				lastAux = time.time()
 
-					if delta < AUX_THRESH and self.getHVACState()[2] == 1:
-						trueCount += 1
-						if auxBool is True or trueCount == 3:
-							auxBool = True
-							trueCount = 0
-						else:
-							auxBool = False
+				if delta < AUX_THRESH and self.getHVACState()[2] == 1:
+					trueCount += 1
+					if auxBool is True or trueCount == 3:
+						auxBool = True
+						trueCount = 0
 					else:
 						auxBool = False
+				else:
+					auxBool = False
 					
 
 
 
-				if dbElapsed > 60:
-					getIndoorTemp(sendToDB=True)
-					self.logStatus(actMode,moduleID,targetTemp,tempList[moduleID-1],self.getHVACState())
-					lastDB = time.time()
+			if dbElapsed > 60:
+				getIndoorTemp(sendToDB=True)
+				self.logStatus(actMode,moduleID,targetTemp,tempList[moduleID-1],self.getHVACState())
+				lastDB = time.time()
 
 				hvacState = self.getHVACState()
 				
@@ -324,9 +330,9 @@ class raspistat(Daemon):
 					hvacState = self.off()
 					actMode="'Off'"
 				else:
-					self.log('It Broke?', LOGLEVEL.PANIC)
+					self.log('It Broke?', LOGLEVELS.PANIC)
 
-				self.log('Pin Value State:' + self.getHVACState(), LOGLEVEL.INFO)
+				self.log('Pin Value State:' + self.getHVACState(), LOGLEVELS.INFO)
 				self.log('Target Mode:' + targetMode)
 				self.log('Actual Mode:' + actMode)
 				self.log('Temp from DB:' + tempList)
@@ -336,18 +342,18 @@ class raspistat(Daemon):
 
 				time.sleep(5)
 
-			except Exception:
-				if debug==True:
-					self.log(Exception, LOGLEVEL.EXCEPTION)
-					# raise
-				exc_type, exc_obj, exc_tb = sys.exc_info()
-				fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
-				fobj = open(dname+'/logs/thermDaemon.log','wb')
-
-				fobj.write('Error occurred at %s \n'%(datetime.datetime.now().strftime('%m-%d-%y-%X')))
-				fobj.write(str(exc_type.__name__)+'\n')
-				fobj.write(str(fname)+'\n')
-				fobj.write(str(exc_tb.tb_lineno)+'\n\n')
+			#except Exception as e:
+			#	if debug==True:
+			#		self.log('An overall exception occurred. Check the logs!', LOGLEVELS.EXCEPTION)
+			#		# raise
+			#	exc_type, exc_obj, exc_tb = sys.exc_info()
+			#	fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
+			#	fobj = open(dname+'/rpi.log','at')
+			#
+			#	fobj.write(datetime.now().strftime('%c') + '\n')
+			#	fobj.write(str(exc_type.__name__)+'\n')
+			#	fobj.write(str(fname)+'\n')
+			#	fobj.write(str(exc_tb.tb_lineno)+'\n\n')
 
 
 
@@ -364,11 +370,13 @@ if __name__ == "__main__":
                 elif 'restart' == sys.argv[1]:
                         daemon.restart()
                 elif 'debug' == sys.argv[1]:
-                		daemon.run(True)
+                        daemon.run(True)
                 else:
                         print('Unknown command')
                         sys.exit(2)
+                
+
                 sys.exit(0)
         else:
-                print("usage: %s start|stop|restart" % sys.argv[0])
+                print("raspistat daemon usage: %s start|stop|restart|debug" % sys.argv[0])
                 sys.exit(2)

@@ -5,16 +5,16 @@
 import subprocess
 import glob
 import time
-import MySQLdb as mdb
+import pymysql as mdb
 import os
 
-import ConfigParser
+import configparser
 
 abspath = os.path.abspath(__file__)
 dname = os.path.dirname(abspath)
 
-config = ConfigParser.ConfigParser()
-config.read(dname+"/config.txt")
+config = configparser.ConfigParser()
+config.read(dname+"/rpi.conf")
 
 CONN_PARAMS = (config.get('main','mysqlHost'), config.get('main','mysqlUser'),
                config.get('main','mysqlPass'), config.get('main','mysqlDatabase'),
