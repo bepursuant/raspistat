@@ -1,24 +1,31 @@
 [main]
 DEBUG = 0
 
+#show log events equal to or above this threshold
+#DEBUG INFO WARNING ERROR EXCEPTION PANIC
+LOGLEVEL = DEBUG
+
 #amount that read temp can stray from target before we take action
-active_hysteresis = 1
-inactive_hysteresis = 2
+overshoot = 1
+slump = 1
 
-ORANGE_PIN = 17
-YELLOW_PIN = 27
-GREEN_PIN = 22
-AUX_PIN = 23
+#how long should we wait before reading/recording temp from onboard sensor (module 1) in seconds
+TEMP_ELAPSED = 60
 
-#Module ID that you wish to control the Aux heat.  This is to avoid
-#Aux heat coming on for temperature fluctuations that may occur from
-# a door opening, etc. This should probably be the sensor that is in
-# the same place as your original thermostat.
-AUX_ID = 1
+[database]
+DB_HOST = 127.0.0.1
+DB_PORT = 3306
+DB_USER = USER
+DB_PASS = PASS
+DB_NAME = raspistat
 
+[hardware]
+R_PIN = 2
+B_PIN = 3
+G_PIN = 4
+W_PIN = 17
+Y_PIN = 27
 
-mysqlUser = root
-mysqlPass = rootley
-mysqlDatabase = raspistat
-mysqlHost = 127.0.0.1
-mysqlPort = 3306
+#commenting out reversing valve as I don't have one to test on
+#O_PIN = 22
+#B_PIN = 10

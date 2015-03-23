@@ -13,8 +13,6 @@ import pymysql as mdb
 
 from PythonDaemon import Daemon
 
-# from daemon import runner
-from getIndoorTemp import getIndoorTemp
 
 #set working directory to where "thermDaemon.py" is
 abspath = os.path.abspath(__file__)
@@ -23,33 +21,45 @@ dname = os.path.dirname(abspath)
 
 #read values from the config file
 config = configparser.ConfigParser()
-config.read(dname+"/rpi.conf")
+config.read(dname + "/rpi.conf")
 
-active_hysteresis = config.getfloat('main','active_hysteresis')
-inactive_hysteresis = config.getfloat('main','inactive_hysteresis')
+LOGLEVEL = config.get('main', 'LOGLEVEL')
+
+overshoot = config.getfloat('main', 'overshoot')
+slump = config.getfloat('main', 'slump')
+
+TEMP_ELAPSED = config.getfloat('main', 'TEMP_ELAPSED')
+
+#R_PIN = config.getint('hardware', 'R_PIN') #24 AC Power
+#B_PIN = config.getint('hardware', 'B_PIN') #24V AC Common
+G_PIN = config.getint('hardware', 'G_PIN') #Indoor Fan
+W_PIN = config.getint('hardware', 'W_PIN') #Heat
+Y_PIN = config.getint('hardware', 'Y_PIN') #Cool
+
+#commenting out reversing valve as I don't have one to test on
+#O_PIN = config.getint('hardware', 'O_PIN') #RV in Cool
+#B_PIN = config.getint('hardware', 'B_PIN') #RV in heat
+
+DB_HOST = config.get('database', 'DB_HOST')
+DB_PORT = config.getint('database', 'DB_PORT')
+DB_USER = config.get('database', 'DB_USER')
+DB_PASS = config.get('database', 'DB_PASS')
+DB_NAME = config.get('database', 'DB_NAME')
 
 
-ORANGE_PIN = int(config.get('main','ORANGE_PIN'))
-YELLOW_PIN = int(config.get('main','YELLOW_PIN'))
-GREEN_PIN = int(config.get('main','GREEN_PIN'))
-AUX_PIN = int(config.get('main','AUX_PIN'))
+#setup enums for code readability
+LOGLEVELS = Enum('LOGLEVELS', 'DEBUG INFO WARNING ERROR EXCEPTION PANIC')
 
-AUX_ID = int(config.get('main','AUX_ID'))
+STATES = Enum('STATES', 'IDLE FAN HEAT COOL PANIC')
 
-AUX_TIMER = 10 #minutes
-AUX_THRESH = 0.2 #degrees
-
-CONN_PARAMS = (config.get('main','mysqlHost'), config.get('main','mysqlUser'),
-               config.get('main','mysqlPass'), config.get('main','mysqlDatabase'),
-               int(config.get('main','mysqlPort')))
-
-LOGLEVELS = Enum('LOGLEVELS', 'INFO WARNING EXCEPTION ERROR PANIC DEBUG')
+testTemp = 80
 
 
 class raspistat(Daemon):
 
 	def log(self, message, level):
-		print('[' + level.name + '] ' + message );
+		if level.value >= LOGLEVELS[LOGLEVEL].value:
+			print(datetime.now().strftime("%FT%TZ") + (' [' + level.name + ']').ljust(11) + message );
 
 		
 	def configureGPIO(self):
@@ -57,102 +67,144 @@ class raspistat(Daemon):
 		self.log("Configuring GPIO", LOGLEVELS.INFO)
 
 		GPIO.setmode(GPIO.BCM)
-		GPIO.setup(ORANGE_PIN, GPIO.OUT)
-		GPIO.setup(YELLOW_PIN, GPIO.OUT)
-		GPIO.setup(GREEN_PIN, GPIO.OUT)
-		GPIO.setup(AUX_PIN, GPIO.OUT)
+		GPIO.setup(G_PIN, GPIO.OUT)
+		GPIO.setup(W_PIN, GPIO.OUT)
+		GPIO.setup(Y_PIN, GPIO.OUT)
+
 
 		self.log("Exporting GPIO", LOGLEVELS.DEBUG)
 
-		subprocess.Popen("echo " + str(ORANGE_PIN) + " > /sys/class/gpio/export", shell=True)
-		subprocess.Popen("echo " + str(YELLOW_PIN) + " > /sys/class/gpio/export", shell=True)
-		subprocess.Popen("echo " + str(GREEN_PIN) + " > /sys/class/gpio/export", shell=True)
-		subprocess.Popen("echo " + str(AUX_PIN) + " > /sys/class/gpio/export", shell=True)
+		subprocess.Popen("echo " + str(G_PIN) + " > /sys/class/gpio/export", shell=True)
+		subprocess.Popen("echo " + str(W_PIN) + " > /sys/class/gpio/export", shell=True)
+		subprocess.Popen("echo " + str(Y_PIN) + " > /sys/class/gpio/export", shell=True)
+
+		subprocess.Popen("echo " + str(G_PIN) + " > /sys/class/gpio/export", shell=True)  #Indoor Fan
+		subprocess.Popen("echo " + str(W_PIN) + " > /sys/class/gpio/export", shell=True)  #Heat
+		subprocess.Popen("echo " + str(Y_PIN) + " > /sys/class/gpio/export", shell=True)  #Cool
 
 
-	def getHVACState(self):
+	def dbOpen(self):
+		return mdb.connect(host=DB_HOST, port=DB_PORT, user=DB_USER, passwd=DB_PASS, db=DB_NAME)
 
-		self.log("getHVACState - pulling pin values", LOGLEVELS.DEBUG)
+
+	def readTemp(self):
+
+		self.log("readTemp - pulling onboard sensor value", LOGLEVELS.DEBUG)
+
+		return testTemp
+
+		#setup probe
+		subprocess.Popen('modprobe w1-gpio', shell=True)
+		subprocess.Popen('modprobe w1-therm', shell=True)
+		base_dir = '/sys/bus/w1/devices/'
+		device_folder = glob.glob(base_dir + '28*')[0]
+		device_file = device_folder + '/w1_slave'
+
+		#read temp
+		f = open(device_file, 'r')
+		lines = f.readlines()
+		f.close()
+
+		while lines[0].strip()[-3:] != 'YES':
+			time.sleep(0.2)
+			f = open(device_file, 'r')
+			lines = f.readlines()
+			f.close()
+			equals_pos = lines[1].find('t=')
+			if equals_pos != -1:
+				temp_string = lines[1][equals_pos+2:]
+				temp_c = float(temp_string) / 1000.0
+				temp_f = temp_c * 9.0 / 5.0 + 32.0
+
+				return temp_f
+
+		#return cpu temp... probably not a great idea
+		return read_temp()
+
+
+	def readState(self):
+
+		self.log("readState - pulling pin values", LOGLEVELS.DEBUG)
+
+		GStatus = int(subprocess.Popen("cat /sys/class/gpio/gpio" + str(G_PIN) + "/value", shell=True, stdout=subprocess.PIPE).stdout.read().strip())
+		WStatus = int(subprocess.Popen("cat /sys/class/gpio/gpio" + str(W_PIN) + "/value", shell=True, stdout=subprocess.PIPE).stdout.read().strip())
+		YStatus = int(subprocess.Popen("cat /sys/class/gpio/gpio" + str(Y_PIN) + "/value", shell=True, stdout=subprocess.PIPE).stdout.read().strip())
 		
-		orangeStatus = int(subprocess.Popen("cat /sys/class/gpio/gpio" + str(ORANGE_PIN) + "/value", shell=True, stdout=subprocess.PIPE).stdout.read().strip())
-		yellowStatus = int(subprocess.Popen("cat /sys/class/gpio/gpio" + str(YELLOW_PIN) + "/value", shell=True, stdout=subprocess.PIPE).stdout.read().strip())
-		greenStatus = int(subprocess.Popen("cat /sys/class/gpio/gpio" + str(GREEN_PIN) + "/value", shell=True, stdout=subprocess.PIPE).stdout.read().strip())
-		auxStatus = int(subprocess.Popen("cat /sys/class/gpio/gpio" + str(AUX_PIN) + "/value", shell=True, stdout=subprocess.PIPE).stdout.read().strip())
+
+		if GStatus == 1 and YStatus == 1:
+			return STATES.COOL
 		
+		elif GStatus == 1 and WStatus == 1:
+			return STATES.HEAT
 
-		if orangeStatus == 1 and yellowStatus == 1 and greenStatus == 1 and auxStatus == 0:
-		   #cooling
-			return (1, 1, 0, 0)
-		
-		elif yellowStatus == 1 and greenStatus == 1:
-			 #heating
-			if auxStatus == 0:
-				return (1, 0, 1, 0)
-			else:
-				return (1, 0, 1, 1)
+		elif GStatus == 1 and YStatus == 0 and WStatus == 0:
+			return STATES.FAN
 
-		elif orangeStatus == 0 and yellowStatus == 0 and greenStatus == 0 and auxStatus == 0:
-			#idle
-			return (0, 0, 0, 0)
-
-		elif orangeStatus == 0 and yellowStatus == 0 and greenStatus == 1 and auxStatus == 0:
-			#fan
-			return (1, 0 , 0, 0)
+		elif GStatus == 0 and WStatus == 0 and YStatus == 0:
+			return STATES.IDLE
 
 		else:
-			#broken
-			return (1, 1, 1, 1)
+			self.log('readState - Panic state! Pin reads dont make sense...', LOGLEVELs.ERROR)
+			return STATES.PANIC
+
 
 	def cool(self):
-		GPIO.output(ORANGE_PIN, True)
-		GPIO.output(YELLOW_PIN, True)
-		GPIO.output(GREEN_PIN, True)
-		GPIO.output(AUX_PIN, False)
-		return (1, 1, 0, 0)
+		self.log('Outputting "COOL" command...', LOGLEVELS.DEBUG)
+
+		GPIO.output(G_PIN, True) #Indoor Fan
+		GPIO.output(W_PIN, False) #Heat
+		GPIO.output(Y_PIN, True) #Cool
+
+		#commenting out reversing valve as I don't have one to test on
+		#GPIO.output(O_PIN, True) #RV in Cool
+		#GPIO.output(B_PIN, False) #RV in heat
+		return STATES.COOL
+
 
 	def heat(self):
-		GPIO.output(ORANGE_PIN, False)
-		GPIO.output(YELLOW_PIN, True)
-		GPIO.output(GREEN_PIN, True)
-		GPIO.output(AUX_PIN, False)
-		return (1, 0, 1, 0)
+		self.log('Outputting "HEAT" command...', LOGLEVELS.DEBUG)
 
-	def aux(self):
-		GPIO.output(ORANGE_PIN, False)
-		GPIO.output(YELLOW_PIN, True)
-		GPIO.output(GREEN_PIN, True)
-		GPIO.output(AUX_PIN, True)
-		return (1, 0, 1, 1)
+		GPIO.output(G_PIN, True) #Indoor Fan
+		GPIO.output(W_PIN, True) #Heat
+		GPIO.output(Y_PIN, False) #Cool
+
+		#commenting out reversing valve as I don't have one to test on
+		#GPIO.output(O_PIN, False) #RV in Cool
+		#GPIO.output(B_PIN, True) #RV in heat
+		return STATES.HEAT
+
 
 	def fan(self): 
+		self.log('Outputting "FAN" command...', LOGLEVELS.DEBUG)
+
 		#to blow the rest of the heated / cooled air out of the system
-		GPIO.output(ORANGE_PIN, False)
-		GPIO.output(YELLOW_PIN, False)
-		GPIO.output(GREEN_PIN, True)
-		GPIO.output(AUX_PIN, False)
-		return (1, 0, 0, 0)
+		GPIO.output(G_PIN, True) #Indoor Fan
+		GPIO.output(W_PIN, False) #Heat
+		GPIO.output(Y_PIN, False) #Cool
+
+		#commenting out reversing valve as I don't have one to test on
+		#GPIO.output(O_PIN, False) #RV in Cool
+		#GPIO.output(B_PIN, Fakse) #RV in heat
+		return STATES.FAN
+
 
 	def idle(self):
-		GPIO.output(ORANGE_PIN, False)
-		GPIO.output(YELLOW_PIN, False)
-		GPIO.output(GREEN_PIN, False)
-		GPIO.output(AUX_PIN, False)
-		#delay to preserve compressor
-		print('Idling...')
-		time.sleep(360)
-		return (0, 0, 0, 0)
+		self.log('Outputting "IDLE" command...', LOGLEVELS.DEBUG)
 
-	def off(self):
-		GPIO.output(ORANGE_PIN, False)
-		GPIO.output(YELLOW_PIN, False)
-		GPIO.output(GREEN_PIN, False)
-		GPIO.output(AUX_PIN, False)
-	
-		return (0, 0, 0, 0)
+		GPIO.output(G_PIN, False) #Indoor Fan
+		GPIO.output(W_PIN, False) #Heat
+		GPIO.output(Y_PIN, False) #Cool
+
+		#commenting out reversing valve as I don't have one to test on
+		#GPIO.output(O_PIN, False) #RV in Cool
+		#GPIO.output(B_PIN, False) #RV in heat
+
+		time.sleep(10)	#to save pump
+		return STATES.IDLE
 
 
 	def getDBTargets(self):
-		conDB = mdb.connect(CONN_PARAMS[0],CONN_PARAMS[1],CONN_PARAMS[2],CONN_PARAMS[3],port=CONN_PARAMS[4])
+		conDB = self.dbOpen()
 		cursor = conDB.cursor()
 
 		cursor.execute("SELECT * from ThermostatSet")
@@ -165,7 +217,7 @@ class raspistat(Daemon):
 
 
 	def getTempList(self):
-		conDB = mdb.connect(CONN_PARAMS[0],CONN_PARAMS[1],CONN_PARAMS[2],CONN_PARAMS[3],port=CONN_PARAMS[4])
+		conDB = self.dbOpen()
 		cursor = conDB.cursor()
 
 		cursor.execute("SELECT MAX(moduleID) FROM ModuleInfo")
@@ -186,174 +238,137 @@ class raspistat(Daemon):
 
 		return allModTemps
 
-	def logStatus(self, mode, moduleID, targetTemp,actualTemp,hvacState):
-		conDB = mdb.connect(CONN_PARAMS[0],CONN_PARAMS[1],CONN_PARAMS[2],CONN_PARAMS[3],port=CONN_PARAMS[4])
+
+	def logStatus(self, mode, moduleID, targetTemp, actualTemp, curState):
+		conDB = self.dbOpen()
 		cursor = conDB.cursor()
 
 
 		cursor.execute("""INSERT ThermostatLog SET mode=%s, moduleID=%s, targetTemp=%s, actualTemp=%s,
 						coolOn=%s, heatOn=%s, fanOn=%s, auxOn=%s"""%
 						(str(mode),str(moduleID),str(targetTemp),str(actualTemp),
-						str(hvacState[1]),str(hvacState[2]),str(hvacState[0]),str(hvacState[3])))
+						str(curState[1]),str(curState[2]),str(curState[0]),str(curState[3])))
 
 		cursor.close()
 		conDB.commit()
 		conDB.close()   
 
-	def heatMode(self,auxBool=False):
-		hvacState=self.getHVACState()
+
+	def heatMode(self, auxBool=False):
+		curState=self.readState()
 		tempList = self.getTempList()
 
 		setTime, moduleID, targetTemp, targetMode, expiryTime = self.getDBTargets()
 
-		if hvacState == (0,0,0,0): #idle
+		if curState == (0,0,0,0): #idle
 			if tempList[moduleID-1] < targetTemp - inactive_hysteresis:
-				hvacState = self.heat()
+				curState = self.heat()
 
-		elif hvacState == (1,0,1,0) or hvacState == (1,0,1,1): #heating
+		elif curState == (1,0,1,0) or curState == (1,0,1,1): #heating
 			if auxBool:
-				hvacState = self.aux()
+				curState = self.aux()
 			else:
-				hvacState = self.heat()
+				curState = self.heat()
 
 			if tempList[moduleID-1] > targetTemp + active_hysteresis:
 				self.fan()
 				time.sleep(30)
-				hvacState = self.idle()
+				curState = self.idle()
 
-		elif hvacState == (1,1,0,0): # it's cold out, why is the AC running?
-						hvacState = self.idle()
-		return hvacState
+		elif curState == (1,1,0,0): # it's cold out, why is the AC running?
+						curState = self.idle()
+		return curState
+
 
 	def coolMode(self):
-		hvacState=self.getHVACState()
+		curState=self.readState()
 		tempList = self.getTempList()
 
 		setTime, moduleID, targetTemp, targetMode, expiryTime = self.getDBTargets()
 
-		if hvacState == (0,0,0,0): #idle
+		if curState == (0,0,0,0): #idle
 			print(tempList[moduleID-1],targetTemp,inactive_hysteresis)
 			if tempList[moduleID-1] > targetTemp + inactive_hysteresis:
-				hvacState = self.cool()
+				curState = self.cool()
 
-		elif hvacState == (1,1,0,0): #cooling
+		elif curState == (1,1,0,0): #cooling
 			if tempList[moduleID-1] < targetTemp - active_hysteresis:
 				self.fan()
 				time.sleep(30)
 
-				hvacState = self.idle()
+				curState = self.idle()
 
-		elif hvacState == (1,0,1,0) or hvacState == (1,0,1,1): # it's hot out, why is the heater on?
-				hvacState = self.idle()
-		return hvacState
+		elif curState == (1,0,1,0) or curState == (1,0,1,1): # it's hot out, why is the heater on?
+				curState = self.idle()
+		return curState
 	
 
 
 	def run(self,debug=False):
-		lastDB = time.time()
-		lastAux = time.time()
-		auxTemp = 0
-		auxBool = False
-		trueCount = 0
+		global testTemp
+
+		abspath = os.path.abspath(__file__)
+		dname = os.path.dirname(abspath)
+		os.chdir(dname)
+
+		lastRead = time.time()
+
 		self.configureGPIO()
-		actMode = "'Off'"
+
+		#actMode = "'Off'"
+
+		#enter the main loop, this is the heart of this daemon
 		while True:
-			abspath = os.path.abspath(__file__)
-			dname = os.path.dirname(abspath)
-
-			os.chdir(dname)
-
 			now = time.time()
 
-			dbElapsed = now - lastDB
-				
-			if self.getHVACState()[2] == 1: 
-				auxElapsed = now - lastAux
+			#log temp from onboard sensor (module 1)
+			elapsed = now - lastRead
+			if elapsed > TEMP_ELAPSED:
+				curTemp = self.readTemp()
+				#write to DB
+				lastRead = time.time()
+
+
+			curTemp = self.readTemp() #find from DB
+			targetTemp = 82 #find from DB
+
+			curState = self.readState()
+
+			self.log("State: " + curState.name + " Currently: " + str(curTemp) + " Targeting: " + str(targetTemp), LOGLEVELS.INFO)
+
+			
+			#are we too hot?
+			if curTemp - overshoot > targetTemp:
+				if curState == STATES.COOL or curState == STATES.IDLE:
+					self.log('Going into cool mode', LOGLEVELS.INFO)
+					curState = self.cool()
+				else:
+					self.log("curTemp - overshoot is greater than target, but we're in cool mode so ignore", LOGLEVELS.DEBUG)
+
+			#are we too cold?
+			elif curTemp + slump < targetTemp:
+				if curState == STATES.HEAT or curState == STATES.IDLE:
+					self.log('Going into heat mode', LOGLEVELS.INFO)
+					curState = self.heat()
+				else:
+					self.log("curTemp + slump is less than target, but we're in heat mode so ignore", LOGLEVELS.DEBUG)
+
 			else:
-				auxElapsed = 0
+				self.log('Going into idle mode', LOGLEVELS.INFO)
+				curState = self.idle();
 
 
-			setTime, moduleID, targetTemp, targetMode, expiryTime = self.getDBTargets()
-			moduleID = int(moduleID)
-			targetTemp = int(targetTemp)
+			time.sleep(5)
 
-			tempList = self.getTempList()
+			#simulation mode
+			if curState == STATES.COOL:
+				testTemp -= 0.5
 
+			if curState == STATES.HEAT:
+				testTemp += 0.5
 
-			if auxElapsed > AUX_TIMER*60:
-				
-				curTemp = tempList[AUX_ID-1]
-				delta = float(curTemp)-float(auxTemp)
-				auxTemp = curTemp
-				lastAux = time.time()
-
-				if delta < AUX_THRESH and self.getHVACState()[2] == 1:
-					trueCount += 1
-					if auxBool is True or trueCount == 3:
-						auxBool = True
-						trueCount = 0
-					else:
-						auxBool = False
-				else:
-					auxBool = False
-					
-
-
-
-			if dbElapsed > 60:
-				getIndoorTemp(sendToDB=True)
-				self.logStatus(actMode,moduleID,targetTemp,tempList[moduleID-1],self.getHVACState())
-				lastDB = time.time()
-
-				hvacState = self.getHVACState()
-				
-
-				if actMode[1:-1] not in targetMode:
-					hvacState = self.idle()
-				# heater mode
-				if targetMode == 'Heat':
-					self.heatMode(auxBool)
-					actMode = "'Heat'"
-
-				# ac mode
-				elif targetMode == 'Cool':
-					self.coolMode()
-					actMode ="'Cool'"
-
-				# fan mode
-				elif targetMode == 'Fan':
-					hvacState = self.fan()
-					actMode="'Fan'"
-					
-
-				elif targetMode == 'Off':
-					hvacState = self.off()
-					actMode="'Off'"
-				else:
-					self.log('It Broke?', LOGLEVELS.PANIC)
-
-				self.log('Pin Value State:' + self.getHVACState(), LOGLEVELS.INFO)
-				self.log('Target Mode:' + targetMode)
-				self.log('Actual Mode:' + actMode)
-				self.log('Temp from DB:' + tempList)
-				self.log('Target Temp:' + targetTemp)
-
-
-
-				time.sleep(5)
-
-			#except Exception as e:
-			#	if debug==True:
-			#		self.log('An overall exception occurred. Check the logs!', LOGLEVELS.EXCEPTION)
-			#		# raise
-			#	exc_type, exc_obj, exc_tb = sys.exc_info()
-			#	fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
-			#	fobj = open(dname+'/rpi.log','at')
-			#
-			#	fobj.write(datetime.now().strftime('%c') + '\n')
-			#	fobj.write(str(exc_type.__name__)+'\n')
-			#	fobj.write(str(fname)+'\n')
-			#	fobj.write(str(exc_tb.tb_lineno)+'\n\n')
+			if curState == STATES.IDLE:
+				testTemp -= 0.5
 
 
 
