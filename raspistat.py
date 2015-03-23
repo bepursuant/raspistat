@@ -338,20 +338,16 @@ class raspistat(Daemon):
 
 			
 			#are we too hot?
-			if curTemp - overshoot > targetTemp:
+			if curTemp > targetTemp:
 				if curState == STATES.COOL or curState == STATES.IDLE:
 					self.log('Going into cool mode', LOGLEVELS.INFO)
 					curState = self.cool()
-				else:
-					self.log("curTemp - overshoot is greater than target, but we're in cool mode so ignore", LOGLEVELS.DEBUG)
 
 			#are we too cold?
-			elif curTemp + slump < targetTemp:
+			elif curTemp < targetTemp:
 				if curState == STATES.HEAT or curState == STATES.IDLE:
 					self.log('Going into heat mode', LOGLEVELS.INFO)
 					curState = self.heat()
-				else:
-					self.log("curTemp + slump is less than target, but we're in heat mode so ignore", LOGLEVELS.DEBUG)
 
 			else:
 				self.log('Going into idle mode', LOGLEVELS.INFO)
