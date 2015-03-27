@@ -6,11 +6,8 @@ DEBUG = 0
 LOGLEVEL = DEBUG
 
 #amount that read temp can stray from target before we take action
-overshoot = 1
-slump = 1
-
-#how long should we wait before reading/recording temp from onboard sensor (module 1) in seconds
-TEMP_ELAPSED = 60
+active_pad = 1
+inactive_pad = 1
 
 [database]
 DB_HOST = 127.0.0.1
@@ -29,3 +26,7 @@ Y_PIN = 27
 #commenting out reversing valve as I don't have one to test on
 #O_PIN = 22
 #B_PIN = 10
+
+[sensor]
+#frequency to report temp to db in seconds
+frequency = 60

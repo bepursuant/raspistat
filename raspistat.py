@@ -25,10 +25,12 @@ config.read(dname + "/rpi.conf")
 
 LOGLEVEL = config.get('main', 'LOGLEVEL')
 
-overshoot = config.getfloat('main', 'overshoot')
-slump = config.getfloat('main', 'slump')
+active_pad = config.getfloat('main', 'active_pad')
+inactive_pad  = config.getfloat('main', 'inactive_pad')
 
-TEMP_ELAPSED = config.getfloat('main', 'TEMP_ELAPSED')
+### SENSOR ###
+# how often should we record the temp sensor value
+frequency = config.getfloat('sensor', 'frequency')
 
 #R_PIN = config.getint('hardware', 'R_PIN') #24 AC Power
 #B_PIN = config.getint('hardware', 'B_PIN') #24V AC Common
@@ -52,10 +54,21 @@ LOGLEVELS = Enum('LOGLEVELS', 'DEBUG INFO WARNING ERROR EXCEPTION PANIC')
 
 STATES = Enum('STATES', 'IDLE FAN HEAT COOL PANIC')
 
+MODES = Enum('MODES', 'HEAT COOL SMART')
+
+
 testTemp = 80
 
 
 class raspistat(Daemon):
+
+	global testTemp
+
+	def __init__(self, pidfile):
+		self.STATE = STATES.IDLE
+		self.MODE = MODES.HEAT #TODO change this to use a file!
+
+
 
 	def log(self, message, level):
 		if level.value >= LOGLEVELS[LOGLEVEL].value:
@@ -199,7 +212,7 @@ class raspistat(Daemon):
 		#GPIO.output(O_PIN, False) #RV in Cool
 		#GPIO.output(B_PIN, False) #RV in heat
 
-		time.sleep(10)	#to save pump
+		#time.sleep(10)	#to save pump #fix this... put somwehere else
 		return STATES.IDLE
 
 
@@ -254,64 +267,18 @@ class raspistat(Daemon):
 		conDB.close()   
 
 
-	def heatMode(self, auxBool=False):
-		curState=self.readState()
-		tempList = self.getTempList()
 
-		setTime, moduleID, targetTemp, targetMode, expiryTime = self.getDBTargets()
+	def run(self, debug = False):
 
-		if curState == (0,0,0,0): #idle
-			if tempList[moduleID-1] < targetTemp - inactive_hysteresis:
-				curState = self.heat()
-
-		elif curState == (1,0,1,0) or curState == (1,0,1,1): #heating
-			if auxBool:
-				curState = self.aux()
-			else:
-				curState = self.heat()
-
-			if tempList[moduleID-1] > targetTemp + active_hysteresis:
-				self.fan()
-				time.sleep(30)
-				curState = self.idle()
-
-		elif curState == (1,1,0,0): # it's cold out, why is the AC running?
-						curState = self.idle()
-		return curState
-
-
-	def coolMode(self):
-		curState=self.readState()
-		tempList = self.getTempList()
-
-		setTime, moduleID, targetTemp, targetMode, expiryTime = self.getDBTargets()
-
-		if curState == (0,0,0,0): #idle
-			print(tempList[moduleID-1],targetTemp,inactive_hysteresis)
-			if tempList[moduleID-1] > targetTemp + inactive_hysteresis:
-				curState = self.cool()
-
-		elif curState == (1,1,0,0): #cooling
-			if tempList[moduleID-1] < targetTemp - active_hysteresis:
-				self.fan()
-				time.sleep(30)
-
-				curState = self.idle()
-
-		elif curState == (1,0,1,0) or curState == (1,0,1,1): # it's hot out, why is the heater on?
-				curState = self.idle()
-		return curState
-	
-
-
-	def run(self,debug=False):
 		global testTemp
 
 		abspath = os.path.abspath(__file__)
 		dname = os.path.dirname(abspath)
 		os.chdir(dname)
 
-		lastRead = time.time()
+		LAST = {
+			"sensor": time.time(),
+			"process": time.time()}
 
 		self.configureGPIO()
 
@@ -322,49 +289,67 @@ class raspistat(Daemon):
 			now = time.time()
 
 			#log temp from onboard sensor (module 1)
-			elapsed = now - lastRead
-			if elapsed > TEMP_ELAPSED:
+			elapsed = now - LAST['sensor']
+			if elapsed > frequency:
 				curTemp = self.readTemp()
 				#write to DB
-				lastRead = time.time()
+				LAST['sensor'] = time.time()
 
 
 			curTemp = self.readTemp() #find from DB
 			targetTemp = 82 #find from DB
 
+
+
 			curState = self.readState()
 
 			self.log("State: " + curState.name + " Currently: " + str(curTemp) + " Targeting: " + str(targetTemp), LOGLEVELS.INFO)
 
-			
-			#are we too hot?
-			if curTemp > targetTemp:
-				if curState == STATES.COOL or curState == STATES.IDLE:
-					self.log('Going into cool mode', LOGLEVELS.INFO)
-					curState = self.cool()
-
-			#are we too cold?
-			elif curTemp < targetTemp:
-				if curState == STATES.HEAT or curState == STATES.IDLE:
-					self.log('Going into heat mode', LOGLEVELS.INFO)
-					curState = self.heat()
-
-			else:
-				self.log('Going into idle mode', LOGLEVELS.INFO)
-				curState = self.idle();
 
 
-			time.sleep(5)
+			#instead of sleep(5)ing, let's run this loop as fast as possible, but only process the temp if a certain amount of time has elapsed
+			#this seems unnecessary, as what would be the problem with processing faster?... must think about this
+			elapsed = now - LAST['process']
+			if elapsed > 5:
 
-			#simulation mode
-			if curState == STATES.COOL:
-				testTemp -= 0.5
+				if self.MODE == MODES.HEAT:	#if we are in manual HEAT mode
 
-			if curState == STATES.HEAT:
-				testTemp += 0.5
+					if curTemp < targetTemp:
+						self.STATE = self.heat()
 
-			if curState == STATES.IDLE:
-				testTemp -= 0.5
+					if curTemp >= targetTemp:
+						self.STATE = self.idle()
+
+
+				elif self.MODE == MODES.COOL: #if we are in manual COOL mode
+
+					if curTemp > targetTemp:
+						self.STATE = self.cool()
+
+					if curTemp <= targetTemp:
+						self.STATE = self.idle()
+				
+
+				else:
+
+					self.log("This is weird, the current mode is not valid.", LOGLEVELS.PANIC)
+
+				LAST['process'] = time.time()
+
+
+
+
+
+
+				#simulation mode
+				if curState == STATES.COOL:
+					testTemp -= 0.5
+
+				if curState == STATES.HEAT:
+					testTemp += 0.5
+
+				if curState == STATES.IDLE:
+					testTemp -= 0.5
 
 
 
