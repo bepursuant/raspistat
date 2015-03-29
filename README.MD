@@ -6,12 +6,6 @@ Thankfully due to Debian's wonderful packaging system, installing MySQL is quite
     sudo apt-get update
     sudo apt-get install mysql-server
 
-
-After the package is installed it will ask to set a root password, this account has full administrative privileges so you generally want to give it a fairly strong password. Once that's done MySQL will be up and running and at this point you could use it but there's a couple things we can do to make it run a little better on the Pi.
-
-##Optimizing MySQL
-The first thing we're going to do to optimize MySQL is replace the default my.cnf configuration file with one that is tuned for systems with less resources.
-
     sudo mv /etc/mysql/my.cnf /etc/mysql/my.cnf.bak
     sudo cp /usr/share/doc/mysql-server-5.5/examples/my-small.cnf /etc/mysql/my.cnf
 
@@ -24,3 +18,10 @@ Now make sure you save your changes and let's restart MySQL for all the changes 
     sudo service mysql restart
 
 And there you go, MySQL is now optimized for your Raspberry Pi.
+
+##Installing 3.5" Resistive Display
+    curl -SLs https://apt.adafruit.com/add | sudo bash
+    sudo apt-get install -y adafruit-pitft-helper
+    sudo adafruit-pitft-helper -t 35r
+
+Answer Yes!
