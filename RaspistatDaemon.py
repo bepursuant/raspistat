@@ -19,7 +19,7 @@ dname = os.path.dirname(abspath)
 
 #read values from the config file
 config = configparser.ConfigParser()
-config.read(dname + "/rpi.conf")
+config.read(dname + "/raspistat.cfg")
 
 LOGLEVEL = config.get('main', 'LOGLEVEL')
 
@@ -65,6 +65,8 @@ class RaspistatDaemon(PythonDaemon):
 	def __init__(self, pidfile):
 		self.STATE = STATES.IDLE
 		self.MODE = MODES.HEAT #TODO change this to use a file!
+
+		super().__init__(pidfile)
 
 
 
@@ -301,14 +303,14 @@ class RaspistatDaemon(PythonDaemon):
 
 			curState = self.readState()
 
-			self.log("State: " + curState.name + " Currently: " + str(curTemp) + " Targeting: " + str(targetTemp), LOGLEVELS.INFO)
-
-
 
 			#instead of sleep(5)ing, let's run this loop as fast as possible, but only process the temp if a certain amount of time has elapsed
 			#this seems unnecessary, as what would be the problem with processing faster?... must think about this
 			elapsed = now - LAST['process']
 			if elapsed > 5:
+
+				self.log("State: " + curState.name + " Currently: " + str(curTemp) + " Targeting: " + str(targetTemp), LOGLEVELS.INFO)
+
 
 				if self.MODE == MODES.HEAT:	#if we are in manual HEAT mode
 
