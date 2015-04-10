@@ -9,14 +9,13 @@ abspath = os.path.abspath(__file__)
 dname = os.path.dirname(abspath)
 # os.chdir(dname)
 
-
 if __name__ == "__main__":
-    print(dname+'/raspistat.pid')
     
-    daemon = RaspistatDaemon(dname+'/raspistat.pid')
+    daemon = RaspistatDaemon(pidfile=dname+'/raspistat.pid',
+        configfile=dname+'/raspistat.cfg')
   
 
-    if len(sys.argv) == 2:
+    if len(sys.argv) >= 2:
         if 'start' == sys.argv[1]:
             daemon.start()
 
@@ -28,6 +27,11 @@ if __name__ == "__main__":
 
         elif 'debug' == sys.argv[1]:
             daemon.run(True)
+
+        elif 'set-target' == sys.argv[1]:
+            tempTarget = sys.argv[2]
+
+            daemon.setTempTarget(tempTarget)
 
         else:
             print('Unknown command')

@@ -1,20 +1,25 @@
 [main]
-DEBUG = 0
+DEBUG = 1
 
 #show log events equal to or above this threshold
 #DEBUG INFO WARNING ERROR EXCEPTION PANIC
-LOGLEVEL = DEBUG
+LOGLEVEL = ERROR
 
 #amount that read temp can stray from target before we take action
 active_pad = 1
 inactive_pad = 1
 
 [database]
-DB_HOST = 127.0.0.1
-DB_PORT = 3306
-DB_USER = USER
-DB_PASS = PASS
-DB_NAME = raspistat
+type = sqlite
+file = raspistat.db
+
+#example for mysql
+#type = mysql
+#host = 127.0.0.1
+#port = 3306
+#user = USER
+#pass = PASS
+#name = raspistat
 
 [hardware]
 R_PIN = 2

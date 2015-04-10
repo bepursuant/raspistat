@@ -69,6 +69,7 @@ class PythonDaemon:
 
 
 	def delpid(self):
+		self.atexit()
 		os.remove(self.pidfile)
 
 

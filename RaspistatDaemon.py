@@ -2,12 +2,12 @@ import sys
 import subprocess
 import os
 import time
+import configparser
+import collections
 import RPi.GPIO as GPIO
 from datetime import datetime
-import configparser
+from collections import namedtuple
 from enum import Enum
-
-import pymysql as mdb
 
 from PythonDaemon import PythonDaemon
 
@@ -17,94 +17,109 @@ abspath = os.path.abspath(__file__)
 dname = os.path.dirname(abspath)
 # os.chdir(dname)
 
-#read values from the config file
-config = configparser.ConfigParser()
-config.read(dname + "/raspistat.cfg")
-
-LOGLEVEL = config.get('main', 'LOGLEVEL')
-
-active_pad = config.getfloat('main', 'active_pad')
-inactive_pad  = config.getfloat('main', 'inactive_pad')
-
-### SENSOR ###
-# how often should we record the temp sensor value
-frequency = config.getfloat('sensor', 'frequency')
-
-#R_PIN = config.getint('hardware', 'R_PIN') #24 AC Power
-#B_PIN = config.getint('hardware', 'B_PIN') #24V AC Common
-G_PIN = config.getint('hardware', 'G_PIN') #Indoor Fan
-W_PIN = config.getint('hardware', 'W_PIN') #Heat
-Y_PIN = config.getint('hardware', 'Y_PIN') #Cool
-
-#commenting out reversing valve as I don't have one to test on
-#O_PIN = config.getint('hardware', 'O_PIN') #RV in Cool
-#B_PIN = config.getint('hardware', 'B_PIN') #RV in heat
-
-DB_HOST = config.get('database', 'DB_HOST')
-DB_PORT = config.getint('database', 'DB_PORT')
-DB_USER = config.get('database', 'DB_USER')
-DB_PASS = config.get('database', 'DB_PASS')
-DB_NAME = config.get('database', 'DB_NAME')
-
-
 #setup enums for code readability
 LOGLEVELS = Enum('LOGLEVELS', 'DEBUG INFO WARNING ERROR EXCEPTION PANIC')
-
 STATES = Enum('STATES', 'IDLE FAN HEAT COOL PANIC')
-
 MODES = Enum('MODES', 'HEAT COOL SMART')
-
-
-testTemp = 80
 
 
 class RaspistatDaemon(PythonDaemon):
 
-	global testTemp
 
-	def __init__(self, pidfile):
+	def __init__(self, pidfile, configfile):
 		self.STATE = STATES.IDLE
 		self.MODE = MODES.HEAT #TODO change this to use a file!
 
+		#read values from the config file
+		cfg = configparser.ConfigParser()
+		cfg.read(configfile)
+
+		self.config = {}
+
+
+		self.config['LOGLEVEL'] = cfg.get('main', 'LOGLEVEL')
+
+		self.config['active_pad'] = cfg.getfloat('main', 'active_pad')
+		self.config['inactive_pad']  = cfg.getfloat('main', 'inactive_pad')
+
+		### SENSOR ###
+		# how often should we record the temp sensor value
+		self.config['frequency'] = cfg.getfloat('sensor', 'frequency')
+
+		#self.config['R_PIN'] = cfg.getint('hardware', 'R_PIN') #24 AC Power
+		#self.config['B_PIN'] = cfg.getint('hardware', 'B_PIN') #24V AC Common
+		self.config['G_PIN'] = cfg.getint('hardware', 'G_PIN') #Indoor Fan
+		self.config['W_PIN'] = cfg.getint('hardware', 'W_PIN') #Heat
+		self.config['Y_PIN'] = cfg.getint('hardware', 'Y_PIN') #Cool
+
+		#commenting out reversing valve as I don't have one to test on
+		#self.config['O_PIN'] = cfg.getint('hardware', 'O_PIN') #RV in Cool
+		#self.config['B_PIN'] = cfg.getint('hardware', 'B_PIN') #RV in heat
+
+
+		dbType = cfg.get('database','type')
+		if dbType == 'sqlite':
+			import sqlite3 as mdb
+
+			dbFile = cfg.get('database', 'file')
+
+			self.db = mdb.connect(dbFile)
+			self.db.row_factory = namedtuple_factory
+
+		elif dbType == 'mysql':
+			import pymysql as mdb
+
+			dbHost = cfg.get('database', 'host')
+			dbPort = cfg.getint('database', 'port')
+			dbUser = cfg.get('database', 'user')
+			dbPass = cfg.get('database', 'pass')
+			dbName = cfg.get('database', 'name')
+
+			self.db = mdb.connect(host=dbHost, port=dbPort, user=dbUser, passwd=DB_PASS, db=dbName)
+
+
 		super().__init__(pidfile)
 
+	def atexit(self):
+		self.db.close()
 
 
 	def log(self, message, level):
-		if level.value >= LOGLEVELS[LOGLEVEL].value:
-			print(datetime.now().strftime("%FT%TZ") + (' [' + level.name + ']').ljust(11) + message );
+		if level.value >= LOGLEVELS[self.config['LOGLEVEL']].value:
+			print(datetime.now().strftime("%FT%TZ") + (' [' + level.name + ']').ljust(11), message);
 
 		
 	def configureGPIO(self):
 
-		self.log("Configuring GPIO", LOGLEVELS.INFO)
+		self.log(">> Configuring GPIO", LOGLEVELS.INFO)
+
+		GPIO.setwarnings(False)
 
 		GPIO.setmode(GPIO.BCM)
-		GPIO.setup(G_PIN, GPIO.OUT)
-		GPIO.setup(W_PIN, GPIO.OUT)
-		GPIO.setup(Y_PIN, GPIO.OUT)
+		GPIO.setup(self.config['G_PIN'], GPIO.OUT)
+		GPIO.setup(self.config['W_PIN'], GPIO.OUT)
+		GPIO.setup(self.config['Y_PIN'], GPIO.OUT)
 
 
-		self.log("Exporting GPIO", LOGLEVELS.DEBUG)
+		self.log(">> Exporting GPIO", LOGLEVELS.DEBUG)
 
-		subprocess.Popen("echo " + str(G_PIN) + " > /sys/class/gpio/export", shell=True)
-		subprocess.Popen("echo " + str(W_PIN) + " > /sys/class/gpio/export", shell=True)
-		subprocess.Popen("echo " + str(Y_PIN) + " > /sys/class/gpio/export", shell=True)
+		subprocess.Popen("echo " + str(self.config['G_PIN']) + " > /sys/class/gpio/export", shell=True)
+		subprocess.Popen("echo " + str(self.config['W_PIN']) + " > /sys/class/gpio/export", shell=True)
+		subprocess.Popen("echo " + str(self.config['Y_PIN']) + " > /sys/class/gpio/export", shell=True)
 
-		subprocess.Popen("echo " + str(G_PIN) + " > /sys/class/gpio/export", shell=True)  #Indoor Fan
-		subprocess.Popen("echo " + str(W_PIN) + " > /sys/class/gpio/export", shell=True)  #Heat
-		subprocess.Popen("echo " + str(Y_PIN) + " > /sys/class/gpio/export", shell=True)  #Cool
+		subprocess.Popen("echo " + str(self.config['G_PIN']) + " > /sys/class/gpio/export", shell=True)  #Indoor Fan
+		subprocess.Popen("echo " + str(self.config['W_PIN']) + " > /sys/class/gpio/export", shell=True)  #Heat
+		subprocess.Popen("echo " + str(self.config['Y_PIN']) + " > /sys/class/gpio/export", shell=True)  #Cool
 
 
-	def dbOpen(self):
-		return mdb.connect(host=DB_HOST, port=DB_PORT, user=DB_USER, passwd=DB_PASS, db=DB_NAME)
+
 
 
 	def readTemp(self):
 
-		self.log("readTemp - pulling onboard sensor value", LOGLEVELS.DEBUG)
+		self.log("readTemp() pulling onboard sensor value", LOGLEVELS.DEBUG)
 
-		return testTemp
+		return 82
 
 		#setup probe
 		subprocess.Popen('modprobe w1-gpio', shell=True)
@@ -137,11 +152,11 @@ class RaspistatDaemon(PythonDaemon):
 
 	def readState(self):
 
-		self.log("readState - pulling pin values", LOGLEVELS.DEBUG)
+		self.log("readState() pulling pin values", LOGLEVELS.DEBUG)
 
-		GStatus = int(subprocess.Popen("cat /sys/class/gpio/gpio" + str(G_PIN) + "/value", shell=True, stdout=subprocess.PIPE).stdout.read().strip())
-		WStatus = int(subprocess.Popen("cat /sys/class/gpio/gpio" + str(W_PIN) + "/value", shell=True, stdout=subprocess.PIPE).stdout.read().strip())
-		YStatus = int(subprocess.Popen("cat /sys/class/gpio/gpio" + str(Y_PIN) + "/value", shell=True, stdout=subprocess.PIPE).stdout.read().strip())
+		GStatus = int(subprocess.Popen("cat /sys/class/gpio/gpio" + str(self.config['G_PIN']) + "/value", shell=True, stdout=subprocess.PIPE).stdout.read().strip())
+		WStatus = int(subprocess.Popen("cat /sys/class/gpio/gpio" + str(self.config['W_PIN']) + "/value", shell=True, stdout=subprocess.PIPE).stdout.read().strip())
+		YStatus = int(subprocess.Popen("cat /sys/class/gpio/gpio" + str(self.config['Y_PIN']) + "/value", shell=True, stdout=subprocess.PIPE).stdout.read().strip())
 		
 
 		if GStatus == 1 and YStatus == 1:
@@ -157,76 +172,93 @@ class RaspistatDaemon(PythonDaemon):
 			return STATES.IDLE
 
 		else:
-			self.log('readState - Panic state! Pin reads dont make sense...', LOGLEVELs.ERROR)
+			self.log('readState() Panic state! Pin reads dont make sense...', LOGLEVELs.ERROR)
 			return STATES.PANIC
 
 
 	def cool(self):
-		self.log('Outputting "COOL" command...', LOGLEVELS.DEBUG)
+		self.log(">> Outputting 'COOL' command...", LOGLEVELS.DEBUG)
 
-		GPIO.output(G_PIN, True) #Indoor Fan
-		GPIO.output(W_PIN, False) #Heat
-		GPIO.output(Y_PIN, True) #Cool
+		GPIO.output(self.config['G_PIN'], True) #Indoor Fan
+		GPIO.output(self.config['W_PIN'], False) #Heat
+		GPIO.output(self.config['Y_PIN'], True) #Cool
 
 		#commenting out reversing valve as I don't have one to test on
-		#GPIO.output(O_PIN, True) #RV in Cool
-		#GPIO.output(B_PIN, False) #RV in heat
+		#GPIO.output(self.config['O_PIN'], True) #RV in Cool
+		#GPIO.output(self.config['B_PIN'], False) #RV in heat
 		return STATES.COOL
 
 
 	def heat(self):
-		self.log('Outputting "HEAT" command...', LOGLEVELS.DEBUG)
+		self.log(">> Outputting 'HEAT' command...", LOGLEVELS.DEBUG)
 
-		GPIO.output(G_PIN, True) #Indoor Fan
-		GPIO.output(W_PIN, True) #Heat
-		GPIO.output(Y_PIN, False) #Cool
+		GPIO.output(self.config['G_PIN'], True) #Indoor Fan
+		GPIO.output(self.config['W_PIN'], True) #Heat
+		GPIO.output(self.config['Y_PIN'], False) #Cool
 
 		#commenting out reversing valve as I don't have one to test on
-		#GPIO.output(O_PIN, False) #RV in Cool
-		#GPIO.output(B_PIN, True) #RV in heat
+		#GPIO.output(self.config['O_PIN'], False) #RV in Cool
+		#GPIO.output(self.config['B_PIN'], True) #RV in heat
 		return STATES.HEAT
 
 
 	def fan(self): 
-		self.log('Outputting "FAN" command...', LOGLEVELS.DEBUG)
+		self.log(">> Outputting 'FAN' command...", LOGLEVELS.DEBUG)
 
 		#to blow the rest of the heated / cooled air out of the system
-		GPIO.output(G_PIN, True) #Indoor Fan
-		GPIO.output(W_PIN, False) #Heat
-		GPIO.output(Y_PIN, False) #Cool
+		GPIO.output(self.config['G_PIN'], True) #Indoor Fan
+		GPIO.output(self.config['W_PIN'], False) #Heat
+		GPIO.output(self.config['Y_PIN'], False) #Cool
 
 		#commenting out reversing valve as I don't have one to test on
-		#GPIO.output(O_PIN, False) #RV in Cool
-		#GPIO.output(B_PIN, Fakse) #RV in heat
+		#GPIO.output(self.config['O_PIN'], False) #RV in Cool
+		#GPIO.output(self.config['B_PIN'], Fakse) #RV in heat
 		return STATES.FAN
 
 
 	def idle(self):
-		self.log('Outputting "IDLE" command...', LOGLEVELS.DEBUG)
+		self.log(">> Outputting 'IDLE' command...", LOGLEVELS.DEBUG)
 
-		GPIO.output(G_PIN, False) #Indoor Fan
-		GPIO.output(W_PIN, False) #Heat
-		GPIO.output(Y_PIN, False) #Cool
+		GPIO.output(self.config['G_PIN'], False) #Indoor Fan
+		GPIO.output(self.config['W_PIN'], False) #Heat
+		GPIO.output(self.config['Y_PIN'], False) #Cool
 
 		#commenting out reversing valve as I don't have one to test on
-		#GPIO.output(O_PIN, False) #RV in Cool
-		#GPIO.output(B_PIN, False) #RV in heat
+		#GPIO.output(self.config['O_PIN'], False) #RV in Cool
+		#GPIO.output(self.config['B_PIN'], False) #RV in heat
 
 		#time.sleep(10)	#to save pump #fix this... put somwehere else
 		return STATES.IDLE
 
 
-	def getDBTargets(self):
-		conDB = self.dbOpen()
-		cursor = conDB.cursor()
+	def getTempTarget(self):
+		self.log("getTempTarget()", LOGLEVELS.DEBUG)
 
-		cursor.execute("SELECT * from ThermostatSet")
+		cursor = self.db.cursor()
 
-		targs = cursor.fetchall()[0]
+		#lets grab the latest temp target from the db
+		cursor.execute("SELECT * FROM TempTargets ORDER BY `created` DESC")
+
+		targ = cursor.fetchone()
 
 		cursor.close()
-		conDB.close()
-		return targs[:-1]
+
+		return targ.temp
+
+		self.log(">> getTempTarget result " + str(targs), LOGLEVELS.INFO)
+
+
+	def setTempTarget(self, target):
+		self.log("setTempTarget(" + str(target) + ")", LOGLEVELS.DEBUG)
+		cursor = self.db.cursor()
+
+		obj = (None, target, time.time())
+
+		cursor.execute("INSERT INTO TempTargets VALUES (?,?,?)", obj)
+
+		self.db.commit()
+
+		self.log(">> setTempTarget result: " + str(obj), LOGLEVELS.INFO)
 
 
 	def getTempList(self):
@@ -252,14 +284,14 @@ class RaspistatDaemon(PythonDaemon):
 		return allModTemps
 
 
-	def logStatus(self, mode, moduleID, targetTemp, actualTemp, curState):
+	def logStatus(self, mode, moduleID, tempTarget, actualTemp, curState):
 		conDB = self.dbOpen()
 		cursor = conDB.cursor()
 
 
-		cursor.execute("""INSERT ThermostatLog SET mode=%s, moduleID=%s, targetTemp=%s, actualTemp=%s,
+		cursor.execute("""INSERT ThermostatLog SET mode=%s, moduleID=%s, tempTarget=%s, actualTemp=%s,
 						coolOn=%s, heatOn=%s, fanOn=%s, auxOn=%s"""%
-						(str(mode),str(moduleID),str(targetTemp),str(actualTemp),
+						(str(mode),str(moduleID),str(tempTarget),str(actualTemp),
 						str(curState[1]),str(curState[2]),str(curState[0]),str(curState[3])))
 
 		cursor.close()
@@ -269,8 +301,6 @@ class RaspistatDaemon(PythonDaemon):
 
 
 	def run(self, debug = False):
-
-		global testTemp
 
 		abspath = os.path.abspath(__file__)
 		dname = os.path.dirname(abspath)
@@ -282,7 +312,6 @@ class RaspistatDaemon(PythonDaemon):
 
 		self.configureGPIO()
 
-		#actMode = "'Off'"
 
 		#enter the main loop, this is the heart of this daemon
 		while True:
@@ -290,18 +319,10 @@ class RaspistatDaemon(PythonDaemon):
 
 			#log temp from onboard sensor (module 1)
 			elapsed = now - LAST['sensor']
-			if elapsed > frequency:
+			if elapsed > self.config['frequency']:
 				curTemp = self.readTemp()
 				#write to DB
 				LAST['sensor'] = time.time()
-
-
-			curTemp = self.readTemp() #find from DB
-			targetTemp = 82 #find from DB
-
-
-
-			curState = self.readState()
 
 
 			#instead of sleep(5)ing, let's run this loop as fast as possible, but only process the temp if a certain amount of time has elapsed
@@ -309,24 +330,30 @@ class RaspistatDaemon(PythonDaemon):
 			elapsed = now - LAST['process']
 			if elapsed > 5:
 
-				self.log("State: " + curState.name + " Currently: " + str(curTemp) + " Targeting: " + str(targetTemp), LOGLEVELS.INFO)
+				tempTarget = self.getTempTarget() #pulling temp from db
+				curTemp = 80
+
+				curState = self.readState()
+				curMode = self.MODE
+
+				self.log("Mode: "+ curMode.name + " State: " + curState.name + " Currently: " + str(curTemp) + " Targeting: " + str(tempTarget), LOGLEVELS.INFO)
 
 
-				if self.MODE == MODES.HEAT:	#if we are in manual HEAT mode
+				if curMode== MODES.HEAT:	#if we are in manual HEAT mode
 
-					if curTemp < targetTemp:
+					if curTemp < tempTarget:
 						self.STATE = self.heat()
 
-					if curTemp >= targetTemp:
+					if curTemp >= tempTarget:
 						self.STATE = self.idle()
 
 
-				elif self.MODE == MODES.COOL: #if we are in manual COOL mode
+				elif curMode == MODES.COOL: #if we are in manual COOL mode
 
-					if curTemp > targetTemp:
+					if curTemp > tempTarget:
 						self.STATE = self.cool()
 
-					if curTemp <= targetTemp:
+					if curTemp <= tempTarget:
 						self.STATE = self.idle()
 				
 
@@ -337,17 +364,11 @@ class RaspistatDaemon(PythonDaemon):
 				LAST['process'] = time.time()
 
 
-
-
-
-
-				#simulation mode
-				if curState == STATES.COOL:
-					testTemp -= 0.5
-
-				if curState == STATES.HEAT:
-					testTemp += 0.5
-
-				if curState == STATES.IDLE:
-					testTemp -= 0.5
-
+def namedtuple_factory(cursor, row):
+    """
+    Usage:
+    con.row_factory = namedtuple_factory
+    """
+    fields = [col[0] for col in cursor.description]
+    Row = namedtuple("Row", fields)
+    return Row(*row)
