@@ -11,7 +11,7 @@ inactive_pad = 1
 
 [database]
 type = sqlite
-file = raspistat.db
+file = raspistat.sqlite3
 
 #example for mysql
 #type = mysql
@@ -22,15 +22,15 @@ file = raspistat.db
 #name = raspistat
 
 [hardware]
-R_PIN = 2
-B_PIN = 3
-G_PIN = 4
-W_PIN = 17
-Y_PIN = 27
+#R_PIN = 21
+#B_PIN = 22
+G_PIN = 12
+W_PIN = 13
+Y_PIN = 14
 
 #commenting out reversing valve as I don't have one to test on
-#O_PIN = 22
-#B_PIN = 10
+#O_PIN = 23
+#B_PIN = 24
 
 [sensor]
 #frequency to report temp to db in seconds

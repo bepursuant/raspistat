@@ -20,15 +20,12 @@ dname = os.path.dirname(abspath)
 #setup enums for code readability
 LOGLEVELS = Enum('LOGLEVELS', 'DEBUG INFO WARNING ERROR EXCEPTION PANIC')
 STATES = Enum('STATES', 'IDLE FAN HEAT COOL PANIC')
-MODES = Enum('MODES', 'HEAT COOL SMART')
-
 
 class RaspistatDaemon(PythonDaemon):
 
 
 	def __init__(self, pidfile, configfile):
 		self.STATE = STATES.IDLE
-		self.MODE = MODES.HEAT #TODO change this to use a file!
 
 		#read values from the config file
 		cfg = configparser.ConfigParser()
@@ -82,6 +79,7 @@ class RaspistatDaemon(PythonDaemon):
 
 	def atexit(self):
 		self.db.close()
+		GPIO.cleanup()
 
 
 	def log(self, message, level):
@@ -93,7 +91,7 @@ class RaspistatDaemon(PythonDaemon):
 
 		self.log(">> Configuring GPIO", LOGLEVELS.INFO)
 
-		GPIO.setwarnings(False)
+#		GPIO.setwarnings(False)
 
 		GPIO.setmode(GPIO.BCM)
 		GPIO.setup(self.config['G_PIN'], GPIO.OUT)
@@ -152,27 +150,26 @@ class RaspistatDaemon(PythonDaemon):
 
 	def readState(self):
 
-		self.log("readState() pulling pin values", LOGLEVELS.DEBUG)
+		GStatus = GPIO.input(self.config['G_PIN']) #subprocess.Popen("cat /sys/class/gpio/gpio" + str(self.config['G_PIN']) + "/value", shell=True, stdout=subprocess.PIPE).stdout.read().strip()
+		WStatus = GPIO.input(self.config['W_PIN']) #subprocess.Popen("cat /sys/class/gpio/gpio" + str(self.config['W_PIN']) + "/value", shell=True, stdout=subprocess.PIPE).stdout.read().strip()
+		YStatus = GPIO.input(self.config['Y_PIN']) #subprocess.Popen("cat /sys/class/gpio/gpio" + str(self.config['Y_PIN']) + "/value", shell=True, stdout=subprocess.PIPE).stdout.read().strip()
 
-		GStatus = int(subprocess.Popen("cat /sys/class/gpio/gpio" + str(self.config['G_PIN']) + "/value", shell=True, stdout=subprocess.PIPE).stdout.read().strip())
-		WStatus = int(subprocess.Popen("cat /sys/class/gpio/gpio" + str(self.config['W_PIN']) + "/value", shell=True, stdout=subprocess.PIPE).stdout.read().strip())
-		YStatus = int(subprocess.Popen("cat /sys/class/gpio/gpio" + str(self.config['Y_PIN']) + "/value", shell=True, stdout=subprocess.PIPE).stdout.read().strip())
-		
+		self.log(">> readState Result - G: '" + str(GStatus) + "' W: '" + str(WStatus) + "' Y: '" + str(YStatus) + "'", LOGLEVELS.DEBUG)
 
-		if GStatus == 1 and YStatus == 1:
+		if GStatus == True and YStatus == True:
 			return STATES.COOL
 		
-		elif GStatus == 1 and WStatus == 1:
+		elif GStatus == True and WStatus == True:
 			return STATES.HEAT
 
-		elif GStatus == 1 and YStatus == 0 and WStatus == 0:
+		elif GStatus == True and YStatus == False and WStatus == False:
 			return STATES.FAN
 
-		elif GStatus == 0 and WStatus == 0 and YStatus == 0:
+		elif GStatus == False and WStatus == False and YStatus == False:
 			return STATES.IDLE
 
 		else:
-			self.log('readState() Panic state! Pin reads dont make sense...', LOGLEVELs.ERROR)
+			self.log('readState() Panic state! Pin reads dont make sense...', LOGLEVELS.ERROR)
 			return STATES.PANIC
 
 
@@ -231,34 +228,94 @@ class RaspistatDaemon(PythonDaemon):
 		return STATES.IDLE
 
 
-	def getTempTarget(self):
-		self.log("getTempTarget()", LOGLEVELS.DEBUG)
+	def getTarget(self):
+		self.log(">> getTarget()", LOGLEVELS.DEBUG)
 
 		cursor = self.db.cursor()
 
 		#lets grab the latest temp target from the db
-		cursor.execute("SELECT * FROM TempTargets ORDER BY `created` DESC")
+		cursor.execute("SELECT * FROM targets ORDER BY `created` DESC LIMIT 1")
 
 		targ = cursor.fetchone()
 
 		cursor.close()
 
-		return targ.temp
+		self.log(">> getTarget result " + str(targ), LOGLEVELS.DEBUG)
 
-		self.log(">> getTempTarget result " + str(targs), LOGLEVELS.INFO)
+		return targ.target
 
 
-	def setTempTarget(self, target):
-		self.log("setTempTarget(" + str(target) + ")", LOGLEVELS.DEBUG)
+
+	def setTarget(self, target):
+		self.log(">> setTarget(" + str(target) + ")", LOGLEVELS.DEBUG)
 		cursor = self.db.cursor()
 
 		obj = (None, target, time.time())
 
-		cursor.execute("INSERT INTO TempTargets VALUES (?,?,?)", obj)
+		cursor.execute("INSERT INTO targets VALUES (?,?,?)", obj)
 
 		self.db.commit()
 
-		self.log(">> setTempTarget result: " + str(obj), LOGLEVELS.INFO)
+		self.log(">> setTarget result: " + str(obj), LOGLEVELS.DEBUG)
+
+
+
+	def getMode(self):
+		self.log(">> getMode()", LOGLEVELS.DEBUG)
+
+		cursor = self.db.cursor()
+
+		cursor.execute("SELECT * FROM modes ORDER BY `created` DESC LIMIT 1")
+
+		mode = cursor.fetchone()
+
+		cursor.close()
+
+		self.log(">> getMode result:" + str(mode), LOGLEVELS.DEBUG)
+
+		return mode.mode
+
+
+	def setMode(self, mode):
+		self.log(">> setMode(" + str(mode) + ")", LOGLEVELS.DEBUG)
+		cursor = self.db.cursor()
+
+		obj = (None, mode, time.time())
+
+		cursor.execute("INSERT INTO modes VALUES (?,?,?)", obj)
+
+		self.db.commit()
+
+		self.log(">> setMode result: " + str(obj), LOGLEVELS.DEBUG)
+
+	def getTemp(self):
+		self.log(">> getTemp()", LOGLEVELS.DEBUG)
+
+		cursor = self.db.cursor()
+
+		cursor.execute("SELECT * FROM temps ORDER BY `created` DESC LIMIT 1")
+
+		temp = cursor.fetchone()
+
+		cursor.close()
+
+		self.log(">> getTemp result:" + str(temp), LOGLEVELS.DEBUG)
+
+		return temp.temp
+
+
+	def setTemp(self, temp):
+		self.log(">> getTemp(" + str(temp) + ")", LOGLEVELS.DEBUG)
+		cursor = self.db.cursor()
+
+		obj = (None, temp, time.time())
+
+		cursor.execute("INSERT INTO temps VALUES (?,?,?)", obj)
+
+		self.db.commit()
+
+		self.log(">> setTemp result: " + str(obj), LOGLEVELS.DEBUG)
+
 
 
 	def getTempList(self):
@@ -330,32 +387,28 @@ class RaspistatDaemon(PythonDaemon):
 			elapsed = now - LAST['process']
 			if elapsed > 5:
 
-				tempTarget = self.getTempTarget() #pulling temp from db
-				curTemp = 80
-
-				curState = self.readState()
-				curMode = self.MODE
-
-				self.log("Mode: "+ curMode.name + " State: " + curState.name + " Currently: " + str(curTemp) + " Targeting: " + str(tempTarget), LOGLEVELS.INFO)
+				mode = self.getMode()
+				temp = self.getTemp()
+				target = self.getTarget()
 
 
-				if curMode== MODES.HEAT:	#if we are in manual HEAT mode
+				if mode == "HEAT":	#if we are in manual HEAT mode
 
-					if curTemp < tempTarget:
+					if temp < target:
 						self.STATE = self.heat()
 
-					if curTemp >= tempTarget:
+					if temp >= target:
 						self.STATE = self.idle()
 
 
-				elif curMode == MODES.COOL: #if we are in manual COOL mode
+				elif mode  == "COOL": #if we are in manual COOL mode
 
-					if curTemp > tempTarget:
+					if temp > target:
 						self.STATE = self.cool()
 
-					if curTemp <= tempTarget:
+					if temp <= target:
 						self.STATE = self.idle()
-				
+	
 
 				else:
 
@@ -363,6 +416,9 @@ class RaspistatDaemon(PythonDaemon):
 
 				LAST['process'] = time.time()
 
+				state = self.readState()
+
+				self.log("Mode: " + str(mode) + " State: " + str(state.name) + " Currently: " + str(temp) + " Target: " + str(target), LOGLEVELS.INFO)
 
 def namedtuple_factory(cursor, row):
     """

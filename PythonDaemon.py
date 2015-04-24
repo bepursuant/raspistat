@@ -65,10 +65,10 @@ class PythonDaemon:
 			f.write(pid + '\n')
 	
 		# write pidfile
-		atexit.register(self.delpid)
+		atexit.register(self.atexit)
 
 
-	def delpid(self):
+	def atexit(self):
 		self.atexit()
 		os.remove(self.pidfile)
 

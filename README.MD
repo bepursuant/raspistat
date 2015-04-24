@@ -1,4 +1,16 @@
-#Installation
+#Raspistat
+
+##What is it?
+Raspistat is one of many raspberry-pi based thermostats -- the piece that makes raspistat different is it's smart program mode and advanced features that the others never seemed to get around to.
+
+##Usage
+#### Starting the daemon
+    sudo ./raspistat.py start
+#### Stopping the daemon
+    sudo ./raspistat.py stop
+#### Setting the temp via command line
+    sudo ./raspistat.py set-temp 80
+
 
 ##Installing MySQL
 Thankfully due to Debian's wonderful packaging system, installing MySQL is quite easy to do. Just run the following commands.

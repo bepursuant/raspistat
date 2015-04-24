@@ -28,10 +28,20 @@ if __name__ == "__main__":
         elif 'debug' == sys.argv[1]:
             daemon.run(True)
 
-        elif 'set-target' == sys.argv[1]:
-            tempTarget = sys.argv[2]
+        elif 'setTarget' == sys.argv[1]:
+            target = sys.argv[2]
 
-            daemon.setTempTarget(tempTarget)
+            daemon.setTarget(target)
+
+        elif 'setMode' == sys.argv[1]:
+            mode = sys.argv[2]
+
+            daemon.setMode(mode)
+
+        elif 'setTemp' == sys.argv[1]:
+            temp = sys.argv[2]
+
+            daemon.setTemp(temp)
 
         else:
             print('Unknown command')
