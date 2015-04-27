@@ -36,8 +36,7 @@ class RaspistatDaemon(PythonDaemon):
 
 		self.config['LOGLEVEL'] = cfg.get('main', 'LOGLEVEL')
 
-		self.config['active_pad'] = cfg.getfloat('main', 'active_pad')
-		self.config['inactive_pad']  = cfg.getfloat('main', 'inactive_pad')
+		self.config['precision'] = cfg.getfloat('main', 'precision')
 
 		### SENSOR ###
 		# how often should we record the temp sensor value
@@ -236,23 +235,28 @@ class RaspistatDaemon(PythonDaemon):
 		#lets grab the latest temp target from the db
 		cursor.execute("SELECT * FROM targets ORDER BY `created` DESC LIMIT 1")
 
-		targ = cursor.fetchone()
+		target = cursor.fetchone()
+
+		#lets pull in the default value from the config
+		if(target.precision == None):
+			target = target._replace(precision=self.config['precision'])
 
 		cursor.close()
 
-		self.log(">> getTarget result " + str(targ), LOGLEVELS.DEBUG)
+		self.log(">> getTarget result " + str(target), LOGLEVELS.DEBUG)
 
-		return targ.target
+		return target
 
 
 
-	def setTarget(self, target):
-		self.log(">> setTarget(" + str(target) + ")", LOGLEVELS.DEBUG)
+	def setTarget(self, target, precision=None):
+		self.log(">> setTarget(" + str(target) + "," + str(precision) + ")", LOGLEVELS.DEBUG)
+
 		cursor = self.db.cursor()
 
-		obj = (None, target, time.time())
+		obj = (None, target, precision, time.time())
 
-		cursor.execute("INSERT INTO targets VALUES (?,?,?)", obj)
+		cursor.execute("INSERT INTO targets VALUES (?,?,?,?)", obj)
 
 		self.db.commit()
 
@@ -301,7 +305,7 @@ class RaspistatDaemon(PythonDaemon):
 
 		self.log(">> getTemp result:" + str(temp), LOGLEVELS.DEBUG)
 
-		return temp.temp
+		return temp
 
 
 	def setTemp(self, temp):
@@ -364,8 +368,8 @@ class RaspistatDaemon(PythonDaemon):
 		os.chdir(dname)
 
 		LAST = {
-			"sensor": time.time(),
-			"process": time.time()}
+			"sensor": 0,
+			"process": 0}
 
 		self.configureGPIO()
 
@@ -391,22 +395,21 @@ class RaspistatDaemon(PythonDaemon):
 				temp = self.getTemp()
 				target = self.getTarget()
 
-
 				if mode == "HEAT":	#if we are in manual HEAT mode
 
-					if temp < target:
+					if temp.temp < target.target - target.precision:
 						self.STATE = self.heat()
 
-					if temp >= target:
+					if temp.temp >= target.target + target.precision:
 						self.STATE = self.idle()
 
 
 				elif mode  == "COOL": #if we are in manual COOL mode
 
-					if temp > target:
+					if temp.temp > target.target + target.precision:
 						self.STATE = self.cool()
 
-					if temp <= target:
+					if temp.temp <= target.target - target.precision:
 						self.STATE = self.idle()
 	
 
@@ -418,7 +421,7 @@ class RaspistatDaemon(PythonDaemon):
 
 				state = self.readState()
 
-				self.log("Mode: " + str(mode) + " State: " + str(state.name) + " Currently: " + str(temp) + " Target: " + str(target), LOGLEVELS.INFO)
+				self.log("Mode: " + str(mode) + " State: " + str(state.name) + " Currently: " + str(temp.temp) + " Target: " + str(target.target) + " ±" + str(target.precision), LOGLEVELS.INFO)
 
 def namedtuple_factory(cursor, row):
     """

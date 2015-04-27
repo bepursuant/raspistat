@@ -8,8 +8,12 @@ Raspistat is one of many raspberry-pi based thermostats -- the piece that makes 
     sudo ./raspistat.py start
 #### Stopping the daemon
     sudo ./raspistat.py stop
+#### Setting the mode via command line
+    sudo ./raspistat.py setMode {COOL|HEAT}
 #### Setting the temp via command line
-    sudo ./raspistat.py set-temp 80
+    sudo ./raspistat.py setTemp {TEMP}
+#### Setting the target via command line
+    sudo ./raspistat.py setTarget {TARGET} [{PRECISION}]
 
 
 ##Installing MySQL

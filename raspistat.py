@@ -31,7 +31,12 @@ if __name__ == "__main__":
         elif 'setTarget' == sys.argv[1]:
             target = sys.argv[2]
 
-            daemon.setTarget(target)
+            if(len(sys.argv) >= 4):
+                precision = sys.argv[3]
+            else:
+                precision = None
+
+            daemon.setTarget(target, precision)
 
         elif 'setMode' == sys.argv[1]:
             mode = sys.argv[2]
