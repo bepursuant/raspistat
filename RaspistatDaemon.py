@@ -1,6 +1,7 @@
+import os
 import sys
 import subprocess
-import os
+import glob
 import time
 import configparser
 import collections
@@ -90,7 +91,7 @@ class RaspistatDaemon(PythonDaemon):
 
 		self.log(">> Configuring GPIO", LOGLEVELS.INFO)
 
-#		GPIO.setwarnings(False)
+		#GPIO.setwarnings(False)
 
 		GPIO.setmode(GPIO.BCM)
 		GPIO.setup(self.config['G_PIN'], GPIO.OUT)
@@ -108,6 +109,9 @@ class RaspistatDaemon(PythonDaemon):
 		subprocess.Popen("echo " + str(self.config['W_PIN']) + " > /sys/class/gpio/export", shell=True)  #Heat
 		subprocess.Popen("echo " + str(self.config['Y_PIN']) + " > /sys/class/gpio/export", shell=True)  #Cool
 
+		self.log(">> Setting up W1 Device", LOGLEVELS.DEBUG)
+		os.system('modprobe w1-gpio')
+		os.system('modprobe w1-therm')
 
 
 
@@ -116,35 +120,12 @@ class RaspistatDaemon(PythonDaemon):
 
 		self.log("readTemp() pulling onboard sensor value", LOGLEVELS.DEBUG)
 
-		return 82
+		temp = read_temp()
 
-		#setup probe
-		subprocess.Popen('modprobe w1-gpio', shell=True)
-		subprocess.Popen('modprobe w1-therm', shell=True)
-		base_dir = '/sys/bus/w1/devices/'
-		device_folder = glob.glob(base_dir + '28*')[0]
-		device_file = device_folder + '/w1_slave'
+		self.log("readTemp() result:" + str(temp), LOGLEVELS.DEBUG)
 
-		#read temp
-		f = open(device_file, 'r')
-		lines = f.readlines()
-		f.close()
+		return temp
 
-		while lines[0].strip()[-3:] != 'YES':
-			time.sleep(0.2)
-			f = open(device_file, 'r')
-			lines = f.readlines()
-			f.close()
-			equals_pos = lines[1].find('t=')
-			if equals_pos != -1:
-				temp_string = lines[1][equals_pos+2:]
-				temp_c = float(temp_string) / 1000.0
-				temp_f = temp_c * 9.0 / 5.0 + 32.0
-
-				return temp_f
-
-		#return cpu temp... probably not a great idea
-		return read_temp()
 
 
 	def readState(self):
@@ -232,12 +213,12 @@ class RaspistatDaemon(PythonDaemon):
 
 		cursor = self.db.cursor()
 
-		#lets grab the latest temp target from the db
+		#lets grab the latest target from the db
 		cursor.execute("SELECT * FROM targets ORDER BY `created` DESC LIMIT 1")
 
 		target = cursor.fetchone()
 
-		#lets pull in the default value from the config
+		#pull in the default value from the config, so we dont have to implement the logic in our loop code
 		if(target.precision == None):
 			target = target._replace(precision=self.config['precision'])
 
@@ -381,7 +362,7 @@ class RaspistatDaemon(PythonDaemon):
 			#log temp from onboard sensor (module 1)
 			elapsed = now - LAST['sensor']
 			if elapsed > self.config['frequency']:
-				curTemp = self.readTemp()
+				#curTemp = self.readTemp()
 				#write to DB
 				LAST['sensor'] = time.time()
 
@@ -389,6 +370,7 @@ class RaspistatDaemon(PythonDaemon):
 			#instead of sleep(5)ing, let's run this loop as fast as possible, but only process the temp if a certain amount of time has elapsed
 			#this seems unnecessary, as what would be the problem with processing faster?... must think about this
 			elapsed = now - LAST['process']
+	
 			if elapsed > 5:
 
 				mode = self.getMode()
@@ -421,7 +403,7 @@ class RaspistatDaemon(PythonDaemon):
 
 				state = self.readState()
 
-				self.log("Mode: " + str(mode) + " State: " + str(state.name) + " Currently: " + str(temp.temp) + " Target: " + str(target.target) + " ±" + str(target.precision), LOGLEVELS.INFO)
+				self.log("Mode: " + str(mode) + " State: " + str(state.name) + " Currently: " + str(temp.temp) + " Targeting: " + str(target.target) + " ±" + str(target.precision), LOGLEVELS.INFO)
 
 def namedtuple_factory(cursor, row):
     """
@@ -431,3 +413,26 @@ def namedtuple_factory(cursor, row):
     fields = [col[0] for col in cursor.description]
     Row = namedtuple("Row", fields)
     return Row(*row)
+
+def read_temp_raw():
+    base_dir = '/sys/bus/w1/devices/'
+    device_folder = glob.glob(base_dir + '28*')[0]
+    device_file = device_folder + '/w1_slave'
+
+    f = open(device_file, 'r')
+    lines = f.readlines()
+    f.close()
+    return lines
+
+def read_temp():
+    lines = read_temp_raw()
+    while lines[0].strip()[-3:] != 'YES':
+        time.sleep(0.2)
+        lines = read_temp_raw()
+    equals_pos = lines[1].find('t=')
+    if equals_pos != -1:
+        temp_string = lines[1][equals_pos+2:]
+        temp_c = float(temp_string) / 1000.0
+        temp_f = temp_c * 9.0 / 5.0 + 32.0
+
+        return temp_f
