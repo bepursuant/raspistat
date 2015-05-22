@@ -43,10 +43,10 @@ if __name__ == "__main__":
 
             daemon.setMode(mode)
 
-        elif 'setTemp' == sys.argv[1]:
+        elif 'setReading' == sys.argv[1]:
             temp = sys.argv[2]
 
-            daemon.setTemp(temp)
+            daemon.setReading(temp)
 
         else:
             print('Unknown command')

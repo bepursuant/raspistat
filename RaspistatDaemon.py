@@ -20,7 +20,7 @@ dname = os.path.dirname(abspath)
 
 #setup enums for code readability
 LOGLEVELS = Enum('LOGLEVELS', 'DEBUG INFO WARNING ERROR EXCEPTION PANIC')
-STATES = Enum('STATES', 'IDLE FAN HEAT COOL PANIC')
+STATES = Enum('STATES', 'IDLE FAN HEAT COOL')
 
 class RaspistatDaemon(PythonDaemon):
 
@@ -230,14 +230,14 @@ class RaspistatDaemon(PythonDaemon):
 
 
 
-	def setTarget(self, target, precision=None):
-		self.log(">> setTarget(" + str(target) + "," + str(precision) + ")", LOGLEVELS.DEBUG)
+	def setTarget(self, temp, precision=None):
+		self.log(">> setTarget(" + str(temp) + "," + str(precision) + ")", LOGLEVELS.DEBUG)
 
 		cursor = self.db.cursor()
 
-		obj = (None, target, precision, time.time())
+		obj = (temp, precision, time.time())
 
-		cursor.execute("INSERT INTO targets VALUES (?,?,?,?)", obj)
+		cursor.execute("INSERT INTO targets(temp, precision, created) VALUES (?,?,?)", obj)
 
 		self.db.commit()
 
@@ -265,41 +265,41 @@ class RaspistatDaemon(PythonDaemon):
 		self.log(">> setMode(" + str(mode) + ")", LOGLEVELS.DEBUG)
 		cursor = self.db.cursor()
 
-		obj = (None, mode, time.time())
+		obj = (mode, time.time())
 
-		cursor.execute("INSERT INTO modes VALUES (?,?,?)", obj)
+		cursor.execute("INSERT INTO modes(mode, created) VALUES (?,?)", obj)
 
 		self.db.commit()
 
 		self.log(">> setMode result: " + str(obj), LOGLEVELS.DEBUG)
 
-	def getTemp(self):
-		self.log(">> getTemp()", LOGLEVELS.DEBUG)
+	def getReading(self):
+		self.log(">> getReading()", LOGLEVELS.DEBUG)
 
 		cursor = self.db.cursor()
 
-		cursor.execute("SELECT * FROM temps ORDER BY `created` DESC LIMIT 1")
+		cursor.execute("SELECT * FROM readings ORDER BY `created` DESC LIMIT 1")
 
-		temp = cursor.fetchone()
+		reading = cursor.fetchone()
 
 		cursor.close()
 
-		self.log(">> getTemp result:" + str(temp), LOGLEVELS.DEBUG)
+		self.log(">> getReading result:" + str(reading), LOGLEVELS.DEBUG)
 
-		return temp
+		return reading
 
 
-	def setTemp(self, temp):
-		self.log(">> getTemp(" + str(temp) + ")", LOGLEVELS.DEBUG)
+	def setReading(self, temp):
+		self.log(">> setReading(" + str(temp) + ")", LOGLEVELS.DEBUG)
 		cursor = self.db.cursor()
 
-		obj = (None, temp, time.time())
+		obj = (temp, time.time())
 
-		cursor.execute("INSERT INTO temps VALUES (?,?,?)", obj)
+		cursor.execute("INSERT INTO readings(temp, created) VALUES (?,?)", obj)
 
 		self.db.commit()
 
-		self.log(">> setTemp result: " + str(obj), LOGLEVELS.DEBUG)
+		self.log(">> setReading result: " + str(obj), LOGLEVELS.DEBUG)
 
 
 
@@ -374,24 +374,24 @@ class RaspistatDaemon(PythonDaemon):
 			if elapsed > 5:
 
 				mode = self.getMode()
-				temp = self.getTemp()
+				reading = self.getReading()
 				target = self.getTarget()
 
 				if mode == "HEAT":	#if we are in manual HEAT mode
 
-					if temp.temp < target.target - target.precision:
+					if reading.temp < target.temp - target.precision:
 						self.STATE = self.heat()
 
-					if temp.temp >= target.target + target.precision:
+					if reading.temp >= target.temp + target.precision:
 						self.STATE = self.idle()
 
 
 				elif mode  == "COOL": #if we are in manual COOL mode
 
-					if temp.temp > target.target + target.precision:
+					if reading.temp > target.temp + target.precision:
 						self.STATE = self.cool()
 
-					if temp.temp <= target.target - target.precision:
+					if reading.temp <= target.temp - target.precision:
 						self.STATE = self.idle()
 	
 
@@ -403,7 +403,7 @@ class RaspistatDaemon(PythonDaemon):
 
 				state = self.readState()
 
-				self.log("Mode: " + str(mode) + " State: " + str(state.name) + " Currently: " + str(temp.temp) + " Targeting: " + str(target.target) + " ±" + str(target.precision), LOGLEVELS.INFO)
+				self.log("Mode: " + str(mode) + " State: " + str(state.name) + " Currently: " + str(reading.temp) + " Targeting: " + str(target.temp) + " ~ " + str(target.precision),  LOGLEVELS.INFO)
 
 def namedtuple_factory(cursor, row):
     """
