@@ -8,7 +8,9 @@ import collections
 import RPi.GPIO as GPIO
 from datetime import datetime
 from collections import namedtuple
+from decimal import Decimal
 from enum import Enum
+
 
 from PythonDaemon import PythonDaemon
 
@@ -26,14 +28,12 @@ class RaspistatDaemon(PythonDaemon):
 
 
 	def __init__(self, pidfile, configfile):
-		self.STATE = STATES.IDLE
-
+		
 		#read values from the config file
 		cfg = configparser.ConfigParser()
 		cfg.read(configfile)
 
 		self.config = {}
-
 
 		self.config['LOGLEVEL'] = cfg.get('main', 'LOGLEVEL')
 
@@ -41,8 +41,11 @@ class RaspistatDaemon(PythonDaemon):
 
 		### SENSOR ###
 		# how often should we record the temp sensor value
-		self.config['frequency'] = cfg.getfloat('sensor', 'frequency')
+		self.config['frequency'] = cfg.getint('sensor', 'frequency')
+		self.config['places'] = cfg.getint('sensor','places')
 
+
+		### HARDWARE ###
 		#self.config['R_PIN'] = cfg.getint('hardware', 'R_PIN') #24 AC Power
 		#self.config['B_PIN'] = cfg.getint('hardware', 'B_PIN') #24V AC Common
 		self.config['G_PIN'] = cfg.getint('hardware', 'G_PIN') #Indoor Fan
@@ -53,6 +56,9 @@ class RaspistatDaemon(PythonDaemon):
 		#self.config['O_PIN'] = cfg.getint('hardware', 'O_PIN') #RV in Cool
 		#self.config['B_PIN'] = cfg.getint('hardware', 'B_PIN') #RV in heat
 
+		self.log(">> INIT - Welcome to Raspistat", LOGLEVELS.INFO)
+
+		self.log(">> Config Loaded", LOGLEVELS.INFO)
 
 		dbType = cfg.get('database','type')
 		if dbType == 'sqlite':
@@ -62,6 +68,8 @@ class RaspistatDaemon(PythonDaemon):
 
 			self.db = mdb.connect(dbFile)
 			self.db.row_factory = namedtuple_factory
+		
+			self.log(">> Connected to Database /" + str(dbFile), LOGLEVELS.INFO)
 
 		elif dbType == 'mysql':
 			import pymysql as mdb
@@ -91,7 +99,8 @@ class RaspistatDaemon(PythonDaemon):
 
 		self.log(">> Configuring GPIO", LOGLEVELS.INFO)
 
-		#GPIO.setwarnings(False)
+		if(self.config['LOGLEVEL'] != LOGLEVELS.DEBUG):
+			GPIO.setwarnings(False)
 
 		GPIO.setmode(GPIO.BCM)
 		GPIO.setup(self.config['G_PIN'], GPIO.OUT)
@@ -121,6 +130,9 @@ class RaspistatDaemon(PythonDaemon):
 		self.log("readTemp() pulling onboard sensor value", LOGLEVELS.DEBUG)
 
 		temp = read_temp()
+
+		# round to configured places
+		temp = round(temp, self.config['places'])		
 
 		self.log("readTemp() result:" + str(temp), LOGLEVELS.DEBUG)
 
@@ -163,8 +175,7 @@ class RaspistatDaemon(PythonDaemon):
 		#commenting out reversing valve as I don't have one to test on
 		#GPIO.output(self.config['O_PIN'], True) #RV in Cool
 		#GPIO.output(self.config['B_PIN'], False) #RV in heat
-		return STATES.COOL
-
+		self.setState(STATES.COOL)
 
 	def heat(self):
 		self.log(">> Outputting 'HEAT' command...", LOGLEVELS.DEBUG)
@@ -176,7 +187,7 @@ class RaspistatDaemon(PythonDaemon):
 		#commenting out reversing valve as I don't have one to test on
 		#GPIO.output(self.config['O_PIN'], False) #RV in Cool
 		#GPIO.output(self.config['B_PIN'], True) #RV in heat
-		return STATES.HEAT
+		self.setState(STATES.HEAT)
 
 
 	def fan(self): 
@@ -190,7 +201,7 @@ class RaspistatDaemon(PythonDaemon):
 		#commenting out reversing valve as I don't have one to test on
 		#GPIO.output(self.config['O_PIN'], False) #RV in Cool
 		#GPIO.output(self.config['B_PIN'], Fakse) #RV in heat
-		return STATES.FAN
+		self.setState(STATES.FAN)
 
 
 	def idle(self):
@@ -205,7 +216,7 @@ class RaspistatDaemon(PythonDaemon):
 		#GPIO.output(self.config['B_PIN'], False) #RV in heat
 
 		#time.sleep(10)	#to save pump #fix this... put somwehere else
-		return STATES.IDLE
+		self.setState(STATES.IDLE)
 
 
 	def getTarget(self):
@@ -258,16 +269,16 @@ class RaspistatDaemon(PythonDaemon):
 
 		self.log(">> getMode result:" + str(mode), LOGLEVELS.DEBUG)
 
-		return mode.mode
+		return mode
 
 
-	def setMode(self, mode):
-		self.log(">> setMode(" + str(mode) + ")", LOGLEVELS.DEBUG)
+	def setMode(self, name):
+		self.log(">> setMode(" + str(name) + ")", LOGLEVELS.DEBUG)
 		cursor = self.db.cursor()
 
-		obj = (mode, time.time())
+		obj = (name, time.time())
 
-		cursor.execute("INSERT INTO modes(mode, created) VALUES (?,?)", obj)
+		cursor.execute("INSERT INTO modes(name, created) VALUES (?,?)", obj)
 
 		self.db.commit()
 
@@ -285,7 +296,7 @@ class RaspistatDaemon(PythonDaemon):
 		cursor.close()
 
 		self.log(">> getReading result:" + str(reading), LOGLEVELS.DEBUG)
-
+		
 		return reading
 
 
@@ -295,51 +306,49 @@ class RaspistatDaemon(PythonDaemon):
 
 		obj = (temp, time.time())
 
-		cursor.execute("INSERT INTO readings(temp, created) VALUES (?,?)", obj)
+		reading = cursor.execute("INSERT INTO readings(temp, created) VALUES (?,?)", obj)
 
 		self.db.commit()
 
 		self.log(">> setReading result: " + str(obj), LOGLEVELS.DEBUG)
 
+		return self.getReading()
 
+	def getState(self):
+		self.log(">> getState()", LOGLEVELS.DEBUG)
 
-	def getTempList(self):
-		conDB = self.dbOpen()
-		cursor = conDB.cursor()
+		cursor = self.db.cursor()
 
-		cursor.execute("SELECT MAX(moduleID) FROM ModuleInfo")
-		totSensors = int(cursor.fetchall()[0][0])
+		cursor.execute("SELECT * FROM states ORDER BY `created` DESC LIMIT 1")
 
-
-		allModTemps=[]
-		for modID in range(totSensors):
-			try:
-				queryStr = ("SELECT * FROM SensorData WHERE moduleID=%s ORDER BY readingID DESC LIMIT 1" % str(modID+1))
-				cursor.execute(queryStr)
-				allModTemps.append(float(cursor.fetchall()[0][4]))
-			except:
-				pass
+		state = cursor.fetchone()
 
 		cursor.close()
-		conDB.close()
 
-		return allModTemps
+		self.log(">> getState result:" + str(state), LOGLEVELS.DEBUG)
 
-
-	def logStatus(self, mode, moduleID, tempTarget, actualTemp, curState):
-		conDB = self.dbOpen()
-		cursor = conDB.cursor()
+		return state
 
 
-		cursor.execute("""INSERT ThermostatLog SET mode=%s, moduleID=%s, tempTarget=%s, actualTemp=%s,
-						coolOn=%s, heatOn=%s, fanOn=%s, auxOn=%s"""%
-						(str(mode),str(moduleID),str(tempTarget),str(actualTemp),
-						str(curState[1]),str(curState[2]),str(curState[0]),str(curState[3])))
+	def setState(self, state):
+		self.log(">> setState(" + str(state) + ")", LOGLEVELS.DEBUG)
 
-		cursor.close()
-		conDB.commit()
-		conDB.close()   
+		curState = self.getState()
 
+		#no reason to record every 5 seconds the state... let's only write it to the DB if it has changed
+		if(curState.name != state.name):
+			cursor = self.db.cursor()
+
+			obj = (state.name, time.time())
+
+			cursor.execute("INSERT INTO states(name, created) VALUES (?,?)", obj)
+
+			self.db.commit()
+
+			self.log(">> setState result: " + str(obj), LOGLEVELS.DEBUG)
+
+		else:
+			self.log(">> setState result: State not written to db because it has not changed from " + curState.name, LOGLEVELS.DEBUG)
 
 
 	def run(self, debug = False):
@@ -356,14 +365,21 @@ class RaspistatDaemon(PythonDaemon):
 
 
 		#enter the main loop, this is the heart of this daemon
+		self.log(">> Entering the main loop -- here we go!", LOGLEVELS.INFO)
+
 		while True:
 			now = time.time()
 
 			#log temp from onboard sensor (module 1)
 			elapsed = now - LAST['sensor']
+			lastReading = self.getReading()
 			if elapsed > self.config['frequency']:
-				#curTemp = self.readTemp()
-				#write to DB
+				
+				temp = self.readTemp()
+				
+				if(temp != lastReading.temp):
+					lastReading = self.setReading(temp);
+				
 				LAST['sensor'] = time.time()
 
 
@@ -377,22 +393,23 @@ class RaspistatDaemon(PythonDaemon):
 				reading = self.getReading()
 				target = self.getTarget()
 
-				if mode == "HEAT":	#if we are in manual HEAT mode
+				self.log("Mode: " + str(mode) + " Reading: " + str(reading) + " Target: " + str(target), LOGLEVELS.DEBUG)				
+				if mode.name == "HEAT":	#if we are in manual HEAT mode
 
 					if reading.temp < target.temp - target.precision:
-						self.STATE = self.heat()
+						self.heat()
 
 					if reading.temp >= target.temp + target.precision:
-						self.STATE = self.idle()
+						self.idle()
 
 
-				elif mode  == "COOL": #if we are in manual COOL mode
+				elif mode.name  == "COOL": #if we are in manual COOL mode
 
 					if reading.temp > target.temp + target.precision:
-						self.STATE = self.cool()
+						self.cool()
 
 					if reading.temp <= target.temp - target.precision:
-						self.STATE = self.idle()
+						self.idle()
 	
 
 				else:
@@ -401,9 +418,9 @@ class RaspistatDaemon(PythonDaemon):
 
 				LAST['process'] = time.time()
 
-				state = self.readState()
-
-				self.log("Mode: " + str(mode) + " State: " + str(state.name) + " Currently: " + str(reading.temp) + " Targeting: " + str(target.temp) + " ~ " + str(target.precision),  LOGLEVELS.INFO)
+				expectedState = self.getState()
+				actualState = self.readState()
+				self.log("Mode: " + str(mode.name) + " State: (" + str(expectedState.name) + "/" + str(actualState.name) + ") Currently: " + str(reading.temp) + " Targeting: " + str(target.temp) + " ~ " + str(target.precision),  LOGLEVELS.INFO)
 
 def namedtuple_factory(cursor, row):
     """
